@@ -1,4 +1,4 @@
-"""Vectorized PSNR, SSIM, and compression metrics for SIREN image codec."""
+"""Vectorized PSNR, SSIM, and compression metrics for SIREN image and video codec."""
 
 from __future__ import annotations
 
@@ -27,21 +27,15 @@ def calculate_psnr(
     """Calculate Peak Signal-to-Noise Ratio (PSNR) in dB on GPU or CPU.
 
     Formula: PSNR = 10 * log10(max_val^2 / (MSE + eps))
-
-    Args:
-        pred: Predicted RGB tensor in [0.0, 1.0].
-        target: Target RGB tensor in [0.0, 1.0].
-        max_val: Maximum dynamic range (default: 1.0).
-        eps: Small epsilon for numerical stability.
-
-    Returns:
-        psnr: PSNR value in decibels (dB).
     """
     mse = F.mse_loss(pred, target)
     if mse.item() < eps:
         return 100.0
     psnr = 10.0 * torch.log10((max_val ** 2) / (mse + eps))
     return float(psnr.item())
+
+
+compute_psnr_gpu = calculate_psnr
 
 
 def _gaussian_window(window_size: int, sigma: float, channels: int, device: torch.device) -> torch.Tensor:
@@ -65,18 +59,7 @@ def calculate_ssim(
     sigma: float = 1.5,
     max_val: float = 1.0,
 ) -> float:
-    """Calculate Structural Similarity Index Measure (SSIM) on GPU/CPU.
-
-    Args:
-        pred: Predicted tensor of shape (H, W, C) or (B, C, H, W) in range [0, 1].
-        target: Target tensor of shape (H, W, C) or (B, C, H, W) in range [0, 1].
-        window_size: Gaussian kernel window size (default: 11).
-        sigma: Gaussian kernel standard deviation (default: 1.5).
-        max_val: Maximum dynamic range (default: 1.0).
-
-    Returns:
-        ssim: Scalar SSIM score in [0.0, 1.0].
-    """
+    """Calculate Structural Similarity Index Measure (SSIM) on GPU/CPU."""
     # Standardize shape to (B, C, H, W)
     if pred.ndim == 3:  # (H, W, C)
         pred = pred.permute(2, 0, 1).unsqueeze(0)
@@ -106,6 +89,9 @@ def calculate_ssim(
 
     ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / ((mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2))
     return float(ssim_map.mean().item())
+
+
+compute_ssim_gpu = calculate_ssim
 
 
 def calculate_metrics_all(
