@@ -1,4 +1,4 @@
-"""Continuous Multi-Chunk Streaming Engine with Audio Master Clock & HDR Tone-Mapping."""
+"""Continuous Multi-Chunk Streaming Engine with Audio Master Clock & Double-Buffered Prefetching."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from src.color.tone_mapper import apply_tone_mapping
 from src.container.neura_v2_format import ChunkIndexRecord
 from src.container.neura_v2_reader import NeuraV2Reader
 from src.player.engine import ViewportBounds
+from src.streaming.prefetcher import ChunkPrefetcher
 
 
 class StreamRenderResult(NamedTuple):
@@ -30,6 +31,7 @@ class StreamRenderResult(NamedTuple):
     is_hdr_source: bool
     width: int
     height: int
+    is_prefetched: bool
 
 
 class StreamEngine:
@@ -48,9 +50,8 @@ class StreamEngine:
         self.model = self.reader.create_model_shell(device=self.device)
         self.active_chunk_idx: int = -1
 
-        # Performance Cache
-        self.chunk_cache: Dict[int, Dict[str, torch.Tensor]] = {}
-        self.max_cached_chunks = 8
+        # Double-Buffered CUDA Prefetcher
+        self.prefetcher = ChunkPrefetcher(self.reader, device=self.device)
 
         # Color & HDR properties
         self.is_hdr = bool(self.header.transfer_characteristics in (16, 18) or self.header.color_primaries == 9)
@@ -64,27 +65,18 @@ class StreamEngine:
             except Exception:
                 pass
 
-    def page_chunk(self, chunk_idx: int) -> float:
+    def page_chunk(self, chunk_idx: int) -> Tuple[float, bool]:
         """Page weights for chunk_idx into GPU model shell in sub-millisecond time."""
         if chunk_idx == self.active_chunk_idx:
-            return 0.0
+            return 0.0, True
 
         start_paging = time.perf_counter()
-
-        if chunk_idx in self.chunk_cache:
-            state_dict = self.chunk_cache[chunk_idx]
-        else:
-            state_dict = self.reader.load_chunk_state_dict(chunk_idx, device=self.device)
-            if len(self.chunk_cache) >= self.max_cached_chunks:
-                first_key = next(iter(self.chunk_cache))
-                del self.chunk_cache[first_key]
-            self.chunk_cache[chunk_idx] = state_dict
-
+        state_dict, was_prefetched = self.prefetcher.get_chunk_state_dict(chunk_idx)
         self.model.load_state_dict(state_dict, strict=False)
         self.active_chunk_idx = chunk_idx
 
         paging_ms = (time.perf_counter() - start_paging) * 1000.0
-        return paging_ms
+        return paging_ms, was_prefetched
 
     @torch.no_grad()
     def render_at_time(
@@ -98,21 +90,24 @@ class StreamEngine:
         lod_fast: bool = False,
         chunk_size: int = 262144,
     ) -> StreamRenderResult:
-        """Evaluate continuous field driven by Master Clock with optional HDR tone-mapping."""
+        """Evaluate continuous field driven by Master Clock with prefetching and tone-mapping."""
         start_total = time.perf_counter()
 
         # 1. Locate chunk and compute local coordinate t_local in [-1.0, 1.0]
         chunk_idx, record, t_local = self.reader.locate_chunk_and_local_time(t_global)
 
-        # 2. Sub-millisecond weight paging
-        paging_ms = self.page_chunk(chunk_idx)
+        # 2. Check lookahead and asynchronously prefetch next chunk
+        self.prefetcher.check_and_prefetch(chunk_idx, t_local)
 
-        # 3. Dynamic Level of Detail (LOD)
+        # 3. Sub-millisecond weight paging
+        paging_ms, was_prefetched = self.page_chunk(chunk_idx)
+
+        # 4. Dynamic Level of Detail (LOD)
         start_eval = time.perf_counter()
         eff_w = max(64, render_width // 2) if lod_fast else max(64, render_width)
         eff_h = max(36, render_height // 2) if lod_fast else max(36, render_height)
 
-        # 4. Generate coordinate grid within visible viewport
+        # 5. Generate coordinate grid within visible viewport
         y_coords = torch.linspace(viewport.y_min, viewport.y_max, steps=eff_h, device=self.device, dtype=torch.float32)
         x_coords = torch.linspace(viewport.x_min, viewport.x_max, steps=eff_w, device=self.device, dtype=torch.float32)
 
@@ -122,7 +117,7 @@ class StreamEngine:
         coords_flat = torch.stack([x_grid, y_grid, t_grid], dim=-1).reshape(-1, 3)
         total_eval_points = coords_flat.shape[0]
 
-        # 5. Batch forward inference
+        # 6. Batch forward inference
         preds: list[torch.Tensor] = []
         for start in range(0, total_eval_points, chunk_size):
             end = min(start + chunk_size, total_eval_points)
@@ -131,7 +126,7 @@ class StreamEngine:
 
         rgb_full = torch.cat(preds, dim=0).reshape(eff_h, eff_w, 3)
 
-        # 6. Apply Color Science & Tone Mapping if needed
+        # 7. Apply Color Science & Tone Mapping if needed
         if self.header.transfer_characteristics == 16:  # ST.2084 PQ
             rgb_linear = pq_to_linear(rgb_full)
             if self.header.color_primaries == 9:  # Rec.2020
@@ -173,7 +168,9 @@ class StreamEngine:
             is_hdr_source=self.is_hdr,
             width=render_width,
             height=render_height,
+            is_prefetched=was_prefetched,
         )
 
     def close(self) -> None:
+        self.prefetcher.clear()
         self.reader.close()
