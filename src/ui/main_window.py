@@ -185,8 +185,9 @@ class SirenPlayerWindow(QMainWindow):
         self.equalizer_dlg.filter_changed.connect(self.on_filter_changed)
 
         # Baseline Comparison
-        self.discrete_frames: Optional[list[np.ndarray]] = None
+        self.baseline_cap: Optional[cv2.VideoCapture] = None
         self.baseline_path: Optional[str] = baseline_path
+        self.baseline_fps: float = 24.0
 
         # Playback State
         self.is_playing: bool = False
@@ -521,17 +522,11 @@ class SirenPlayerWindow(QMainWindow):
 
     def load_baseline_video(self, filepath: str) -> None:
         try:
-            cap = cv2.VideoCapture(filepath)
-            frames = []
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            cap.release()
-
-            if frames:
-                self.discrete_frames = frames
+            if self.baseline_cap is not None:
+                self.baseline_cap.release()
+            self.baseline_cap = cv2.VideoCapture(filepath)
+            if self.baseline_cap.isOpened():
+                self.baseline_fps = float(self.baseline_cap.get(cv2.CAP_PROP_FPS) or 24.0)
                 self.baseline_path = filepath
                 self.btn_open_baseline.setText(f"🎬 Baseline: {os.path.basename(filepath)[:10]}")
                 self.render_frame_at_time(self.current_global_time)
@@ -799,10 +794,12 @@ class SirenPlayerWindow(QMainWindow):
 
         if self.is_split_mode:
             discrete_frame = None
-            if self.discrete_frames:
-                fps = float(self.meta.get("fps", 24.0))
-                idx = min(len(self.discrete_frames) - 1, max(0, int(round(t_sec * fps))))
-                discrete_frame = self.discrete_frames[idx]
+            if self.baseline_cap is not None and self.baseline_cap.isOpened():
+                pos_msec = t_sec * 1000.0
+                self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
+                ret, bgr = self.baseline_cap.read()
+                if ret and bgr is not None:
+                    discrete_frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
             self.split_view.update_buffers(
                 siren_rgb=final_rgb,
@@ -849,6 +846,16 @@ class SirenPlayerWindow(QMainWindow):
         cv2.imwrite(shot_path, bgr)
 
         self.osd.show_notification(f"📸 4K Shot Saved: {os.path.basename(shot_path)}", duration_ms=2500)
+
+    def closeEvent(self, event) -> None:
+        self.playback_timer.stop()
+        if self.baseline_cap is not None:
+            self.baseline_cap.release()
+            self.baseline_cap = None
+        self.audio_clock.cleanup()
+        if self.stream_engine is not None:
+            self.stream_engine.close()
+        super().closeEvent(event)
 
 
 def launch_player_app(
