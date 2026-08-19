@@ -1,5 +1,4 @@
-"""Siren-Zip training package."""
-
+from src.training.perceptual_loss import PerceptualCinemaLoss
 from src.training.trainer import (
     ImageTrainer,
     reconstruct_full_image,
@@ -18,4 +17,5 @@ __all__ = [
     "VideoTrainer",
     "reconstruct_video_frame",
     "save_video_sample_frame",
+    "PerceptualCinemaLoss",
 ]

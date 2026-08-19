@@ -1,5 +1,4 @@
-"""Siren-Zip model package."""
-
+from src.model.perceptual_nerv import PerceptualNeRVVideo
 from src.model.quantizer import (
     pack_neura_container,
     quantize_model,
@@ -13,6 +12,7 @@ __all__ = [
     "SirenImage",
     "SpatioTemporalSineLayer",
     "SirenVideo",
+    "PerceptualNeRVVideo",
     "quantize_model",
     "pack_neura_container",
     "unpack_neura_container",

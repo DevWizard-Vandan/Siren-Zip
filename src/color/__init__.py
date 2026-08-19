@@ -8,6 +8,12 @@ from src.color.hdr_transfer import (
     rec2020_to_rec709,
     rec709_to_rec2020,
 )
+from src.color.perceptual_color import (
+    oklab_to_rgb,
+    rgb_to_oklab,
+    rgb_to_ycbcr,
+    ycbcr_to_rgb,
+)
 from src.color.tone_mapper import (
     apply_tone_mapping,
     tone_map_aces_filmic,
@@ -28,4 +34,8 @@ __all__ = [
     "tone_map_reinhard_jodie",
     "tone_map_linear_clamp",
     "apply_tone_mapping",
+    "rgb_to_oklab",
+    "oklab_to_rgb",
+    "rgb_to_ycbcr",
+    "ycbcr_to_rgb",
 ]
