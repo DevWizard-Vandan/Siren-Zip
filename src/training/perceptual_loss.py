@@ -103,19 +103,27 @@ class PerceptualCinemaLoss(nn.Module):
         diff_active = F.relu(diff - self.noise_deadband)
         loss_l1 = diff_active.mean()
 
+        # Adaptive Multi-Scale Downsampling for 4K UHD VRAM optimization
+        if pred.shape[-2] > 1080:
+            pred_eval = F.avg_pool2d(pred, 2)
+            target_eval = F.avg_pool2d(target, 2)
+        else:
+            pred_eval = pred
+            target_eval = target
+
         # 2. Structural Similarity (MS-SSIM / SSIM)
-        if pred.shape[-1] >= self.window_size and pred.shape[-2] >= self.window_size:
-            ssim_val = ssim_metric(pred, target, self.ssim_window, self.window_size, channel=3)
+        if pred_eval.shape[-1] >= self.window_size and pred_eval.shape[-2] >= self.window_size:
+            ssim_val = ssim_metric(pred_eval, target_eval, self.ssim_window, self.window_size, channel=3)
             loss_ssim = 1.0 - ssim_val
         else:
             loss_ssim = torch.tensor(0.0, device=pred.device)
 
         # 3. High-Frequency Edge Gradient Loss (Sobel Edge Preservation)
-        grad_pred_x = F.conv2d(pred, self.sobel_x, padding=1, groups=3)
-        grad_pred_y = F.conv2d(pred, self.sobel_y, padding=1, groups=3)
+        grad_pred_x = F.conv2d(pred_eval, self.sobel_x, padding=1, groups=3)
+        grad_pred_y = F.conv2d(pred_eval, self.sobel_y, padding=1, groups=3)
 
-        grad_target_x = F.conv2d(target, self.sobel_x, padding=1, groups=3)
-        grad_target_y = F.conv2d(target, self.sobel_y, padding=1, groups=3)
+        grad_target_x = F.conv2d(target_eval, self.sobel_x, padding=1, groups=3)
+        grad_target_y = F.conv2d(target_eval, self.sobel_y, padding=1, groups=3)
 
         loss_edge = F.l1_loss(grad_pred_x, grad_target_x) + F.l1_loss(grad_pred_y, grad_target_y)
 

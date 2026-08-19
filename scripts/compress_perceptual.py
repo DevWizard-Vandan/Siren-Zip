@@ -74,32 +74,52 @@ def train_perceptual_nerv(
         noise_deadband=0.012,
     ).to(device)
 
+    # Dynamic batch size & gradient accumulation for 4K VRAM efficiency
+    if target_h > 1080:
+        micro_batch = 1
+        accum_steps = 4
+    elif target_h > 720:
+        micro_batch = 2
+        accum_steps = 2
+    else:
+        micro_batch = 4
+        accum_steps = 1
+
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+    scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
 
-    batch_size = min(4, T_frames)
     model.train()
 
     for ep in range(1, epochs + 1):
-        indices = torch.randint(0, T_frames, (batch_size,), device=device)
-        batch_t = t_coords[indices]
-        
-        # Stream only batch from CPU to GPU (takes <2MB VRAM)
-        batch_np = video_frames_rgb[indices.cpu().numpy()]
-        batch_targets = torch.from_numpy(batch_np).float().permute(0, 3, 1, 2).to(device) / 255.0
+        optimizer.zero_grad(set_to_none=True)
+        for _ in range(accum_steps):
+            indices = torch.randint(0, T_frames, (micro_batch,), device=device)
+            batch_t = t_coords[indices]
+            batch_np = video_frames_rgb[indices.cpu().numpy()]
+            batch_targets = torch.from_numpy(batch_np).float().permute(0, 3, 1, 2).to(device) / 255.0
 
-        optimizer.zero_grad()
-        preds = model(batch_t)
-        loss, _ = criterion(preds, batch_targets)
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
+            with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
+                preds = model(batch_t)
+                loss, _ = criterion(preds, batch_targets)
+                loss = loss / accum_steps
+
+            scaler.scale(loss).backward()
+
+        scale_before = scaler.get_scale()
+        scaler.step(optimizer)
+        scaler.update()
+        scale_after = scaler.get_scale()
+        if scale_before <= scale_after:
+            scheduler.step()
 
         if ep % 100 == 0 or ep == epochs:
             with torch.no_grad():
-                val_mse = nn.functional.mse_loss(preds, batch_targets).item()
+                with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
+                    preds = model(batch_t)
+                val_mse = nn.functional.mse_loss(preds.float(), batch_targets).item()
                 psnr = -10.0 * math.log10(max(1e-9, val_mse)) if val_mse > 0 else 50.0
-                print(f"  [Epoch {ep:04d}/{epochs}] Loss: {loss.item():.5f} | PSNR: {psnr:.2f} dB", flush=True)
+                print(f"  [Epoch {ep:04d}/{epochs}] Loss: {(loss.item() * accum_steps):.5f} | PSNR: {psnr:.2f} dB", flush=True)
 
     # Apply 30% Magnitude Weight Pruning to eliminate near-zero redundant parameters
     if prune_sparsity > 0:
@@ -112,12 +132,14 @@ def train_perceptual_nerv(
     model.eval()
     with torch.no_grad():
         all_mses = []
-        for i in range(0, T_frames, 4):
-            end_i = min(i + 4, T_frames)
+        eval_batch = 1 if target_h > 1080 else (2 if target_h > 720 else 4)
+        for i in range(0, T_frames, eval_batch):
+            end_i = min(i + eval_batch, T_frames)
             b_t = t_coords[i:end_i]
             b_targets = torch.from_numpy(video_frames_rgb[i:end_i]).float().permute(0, 3, 1, 2).to(device) / 255.0
-            pred_f = model(b_t)
-            all_mses.append(nn.functional.mse_loss(pred_f, b_targets).item())
+            with torch.amp.autocast('cuda', enabled=(device == 'cuda')):
+                pred_f = model(b_t)
+            all_mses.append(nn.functional.mse_loss(pred_f.float(), b_targets).item())
         final_mse = float(np.mean(all_mses))
         final_psnr = -10.0 * math.log10(max(1e-9, final_mse)) if final_mse > 0 else 50.0
 
