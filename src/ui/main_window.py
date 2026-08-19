@@ -883,6 +883,7 @@ class SirenPlayerWindow(QMainWindow):
                     size_mb = os.path.getsize(filepath) / (1024.0 * 1024.0)
                     w = self.stream_engine.header.native_width
                     h = self.stream_engine.header.native_height
+                    self.tone_map_mode = "aces" if self.stream_engine.is_hdr else "linear"
                     self.osd.show_notification(f"🎬 Loaded .neura 2.0 ({w}x{h} | {size_mb:.2f} MB)")
                 else:
                     model, meta = NeuraReader.load(filepath, device="cuda")

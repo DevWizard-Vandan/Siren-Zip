@@ -163,6 +163,12 @@ def serialize_payload(tensors: List[QuantizedTensor]) -> bytes:
 
 def deserialize_payload(payload_bytes: bytes, num_tensors: int) -> List[QuantizedTensor]:
     """Deserialize binary payload back to list of QuantizedTensors."""
+    tensors, _ = deserialize_payload_with_residual(payload_bytes, num_tensors)
+    return tensors
+
+
+def deserialize_payload_with_residual(payload_bytes: bytes, num_tensors: int) -> Tuple[List[QuantizedTensor], bytes]:
+    """Deserialize binary payload and extract any trailing compressed residual stream."""
     buffer = io.BytesIO(payload_bytes)
     tensors: List[QuantizedTensor] = []
 
@@ -189,4 +195,12 @@ def deserialize_payload(payload_bytes: bytes, num_tensors: int) -> List[Quantize
             )
         )
 
-    return tensors
+    residual_bytes = b""
+    res_len_bytes = buffer.read(4)
+    if len(res_len_bytes) == 4:
+        res_len = struct.unpack("<I", res_len_bytes)[0]
+        if res_len > 0:
+            residual_bytes = buffer.read(res_len)
+
+    return tensors, residual_bytes
+

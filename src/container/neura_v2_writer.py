@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import struct
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -94,9 +95,10 @@ class NeuraV2Writer:
         start_time: float,
         end_time: float,
         num_frames: int,
-        model_or_tensors: Union[SirenVideo, List[QuantizedTensor]],
+        model_or_tensors: Union[nn.Module, List[QuantizedTensor]],
+        residual_bytes: bytes = b"",
     ) -> int:
-        """Serialize and append a trained chunk's INT8 payload to the container."""
+        """Serialize and append a trained chunk's INT8 payload + optional lossless residual stream."""
         if self.is_finalized:
             raise RuntimeError("Cannot append chunks to a finalized NeuraV2Writer.")
 
@@ -109,6 +111,13 @@ class NeuraV2Writer:
             self.num_tensors_per_chunk = len(quantized_tensors)
 
         payload_bytes = serialize_payload(quantized_tensors)
+
+        # Append optional compressed lossless residual block
+        if residual_bytes:
+            payload_bytes += struct.pack("<I", len(residual_bytes)) + residual_bytes
+        else:
+            payload_bytes += struct.pack("<I", 0)
+
         payload_size = len(payload_bytes)
 
         # Write chunk payload at current file position

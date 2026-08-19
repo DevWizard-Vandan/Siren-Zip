@@ -43,14 +43,14 @@ class ChunkPrefetcher:
             if chunk_idx in self.cache:
                 return
 
-        state_dict = self.reader.load_chunk_state_dict(chunk_idx, device=self.device)
+        state_dict, residual_bytes = self.reader.load_chunk_state_dict_and_residual(chunk_idx, device=self.device)
 
         with self.lock:
             # Maintain maximum 4 active preloaded chunks
             if len(self.cache) >= 4:
                 oldest = next(iter(self.cache))
                 del self.cache[oldest]
-            self.cache[chunk_idx] = state_dict
+            self.cache[chunk_idx] = (state_dict, residual_bytes)
 
     def check_and_prefetch(self, current_chunk_idx: int, t_local: float) -> None:
         """Check if current chunk is nearing completion and prefetch chunk_idx + 1."""
@@ -59,24 +59,25 @@ class ChunkPrefetcher:
             next_idx = current_chunk_idx + 1
             if next_idx < len(self.reader.index_records):
                 with self.lock:
-                    in_cache = next_idx in self.cache
-                if not in_cache:
-                    # Spawn light background thread to prefetch next chunk without blocking render
-                    t = threading.Thread(target=self._preload_chunk, args=(next_idx,), daemon=True)
-                    t.start()
+                    if next_idx in self.cache:
+                        return
+                thread = threading.Thread(target=self._preload_chunk, args=(next_idx,), daemon=True)
+                thread.start()
 
-    def get_chunk_state_dict(self, chunk_idx: int) -> Tuple[Dict[str, torch.Tensor], bool]:
-        """Fetch chunk state dict from prefetch cache (0ms hit) or load immediately on miss."""
+    def get_chunk_state_dict(self, chunk_idx: int) -> Tuple[Dict[str, torch.Tensor], bytes, bool]:
+        """Fetch chunk state_dict and residual bytes from cache or load synchronously."""
         with self.lock:
             if chunk_idx in self.cache:
-                return self.cache[chunk_idx], True
+                state_dict, residual_bytes = self.cache[chunk_idx]
+                return state_dict, residual_bytes, True
 
         # Cache miss: load synchronously
-        state_dict = self.reader.load_chunk_state_dict(chunk_idx, device=self.device)
+        state_dict, residual_bytes = self.reader.load_chunk_state_dict_and_residual(chunk_idx, device=self.device)
         with self.lock:
-            self.cache[chunk_idx] = state_dict
-        return state_dict, False
+            self.cache[chunk_idx] = (state_dict, residual_bytes)
+        return state_dict, residual_bytes, False
 
     def clear(self) -> None:
+        """Flush prefetch cache."""
         with self.lock:
             self.cache.clear()

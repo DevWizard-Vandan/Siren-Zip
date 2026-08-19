@@ -8,6 +8,7 @@ from typing import Any, Dict, NamedTuple, Optional, Tuple, Union
 import numpy as np
 import torch
 
+from src.codec.residual_codec import ResidualCodec
 from src.color.hdr_transfer import pq_to_linear, rec2020_to_rec709
 from src.color.tone_mapper import apply_tone_mapping
 from src.container.neura_v2_format import ChunkIndexRecord
@@ -50,6 +51,10 @@ class StreamEngine:
         self.model = self.reader.create_model_shell(device=self.device)
         self.active_chunk_idx: int = -1
 
+        # Lossless Residual Codec & Chunk Cache
+        self.residual_codec = ResidualCodec()
+        self.active_residuals: Optional[np.ndarray] = None
+
         # Double-Buffered CUDA Prefetcher
         self.prefetcher = ChunkPrefetcher(self.reader, device=self.device)
 
@@ -66,14 +71,19 @@ class StreamEngine:
                 pass
 
     def page_chunk(self, chunk_idx: int) -> Tuple[float, bool]:
-        """Page weights for chunk_idx into GPU model shell in sub-millisecond time."""
+        """Page weights and residual stream for chunk_idx in sub-millisecond time."""
         if chunk_idx == self.active_chunk_idx:
             return 0.0, True
 
         start_paging = time.perf_counter()
-        state_dict, was_prefetched = self.prefetcher.get_chunk_state_dict(chunk_idx)
+        state_dict, residual_bytes, was_prefetched = self.prefetcher.get_chunk_state_dict(chunk_idx)
         self.model.load_state_dict(state_dict, strict=False)
         self.active_chunk_idx = chunk_idx
+
+        if residual_bytes:
+            self.active_residuals = self.residual_codec.decode_chunk_residuals(residual_bytes)
+        else:
+            self.active_residuals = None
 
         paging_ms = (time.perf_counter() - start_paging) * 1000.0
         return paging_ms, was_prefetched
@@ -146,6 +156,18 @@ class StreamEngine:
         if lod_fast and (eff_w != render_width or eff_h != render_height):
             import cv2
             rgb_np = cv2.resize(rgb_np, (render_width, render_height), interpolation=cv2.INTER_LINEAR)
+
+        # 8. Apply Lossless High-Frequency Residual Stream if present
+        if self.active_residuals is not None:
+            import cv2
+            frame_idx = min(
+                self.active_residuals.shape[0] - 1,
+                max(0, int(round((t_local + 1.0) * 0.5 * (self.active_residuals.shape[0] - 1)))),
+            )
+            diff_frame = self.active_residuals[frame_idx]
+            if diff_frame.shape[:2] != (rgb_np.shape[0], rgb_np.shape[1]):
+                diff_frame = cv2.resize(diff_frame, (rgb_np.shape[1], rgb_np.shape[0]), interpolation=cv2.INTER_LINEAR)
+            rgb_np = np.clip(rgb_np.astype(np.int16) + diff_frame, 0, 255).astype(np.uint8)
 
         eval_ms = (time.perf_counter() - start_eval) * 1000.0
         total_latency_ms = (time.perf_counter() - start_total) * 1000.0

@@ -117,13 +117,25 @@ class NeuraV2Reader:
         device: Union[str, torch.device] = "cuda",
     ) -> Dict[str, torch.Tensor]:
         """Zero-copy slice payload from mmap and dequantize INT8 weights into GPU state_dict in <1ms."""
+        state_dict, _ = self.load_chunk_state_dict_and_residual(chunk_idx, device=device)
+        return state_dict
+
+    def load_chunk_state_dict_and_residual(
+        self,
+        chunk_idx: int,
+        device: Union[str, torch.device] = "cuda",
+    ) -> Tuple[Dict[str, torch.Tensor], bytes]:
+        """Load quantized state dict and optional lossless residual stream."""
+        from src.utils.neura_format import deserialize_payload_with_residual
         rec = self.get_chunk_info(chunk_idx)
         payload_bytes = self.mm[rec.byte_offset : rec.byte_offset + rec.byte_size]
 
-        quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
+        quantized_tensors, residual_bytes = deserialize_payload_with_residual(
+            payload_bytes, self.header.num_tensors_per_chunk
+        )
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
         state_dict = dequantize_state_dict(quantized_tensors, torch_device)
-        return state_dict
+        return state_dict, residual_bytes
 
     def create_model_shell(self, device: Union[str, torch.device] = "cuda") -> nn.Module:
         """Create single preallocated GPU model shell ready for instantaneous weight swapping."""
