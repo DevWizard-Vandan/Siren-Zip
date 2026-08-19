@@ -127,10 +127,13 @@ def train_perceptual_nerv(
 def compress_perceptual_movie(
     input_path: str,
     output_neura_path: str,
-    max_duration_sec: Optional[float] = None,
-    epochs: int = 1000,
-    target_res: str = "720p",
+    chunk_duration_sec: float = 3.0,
+    epochs_per_chunk: int = 500,
+    target_res: str = "1080p",
+    audio_track_idx: int = 0,
     audio_bitrate_kbps: int = 320,
+    max_duration_sec: Optional[float] = None,
+    resume: bool = False,
 ) -> None:
     print("=" * 80, flush=True)
     print("[*] SIREN-ZIP: PERCEPTUAL CINEMA COMPRESSOR (HVS-OPTIMIZED NeRV)", flush=True)
@@ -148,8 +151,9 @@ def compress_perceptual_movie(
 
     print(f"* Hardware Device    : {gpu_name}", flush=True)
     print(f"* Perceptual Engine  : Oklab Gamut + MS-SSIM + Sobel Edges + 30% Weight Pruning", flush=True)
+    print(f"* Crash-Resume Mode  : {'ENABLED' if resume else 'DISABLED'}", flush=True)
 
-    # 1. Demux & Ingest
+    # 1. Demux & Probe Input
     info = UniversalDemuxer.inspect(input_path)
     total_dur = min(info.duration_sec, max_duration_sec) if max_duration_sec else info.duration_sec
     print(f"  * Source Video     : {info.width}x{info.height} @ {info.fps:.2f} FPS ({total_dur:.2f}s)", flush=True)
@@ -164,48 +168,109 @@ def compress_perceptual_movie(
         target_h = 720
         target_w = 1280
 
-    # Ingest frames into memory buffer
-    cap = cv2.VideoCapture(input_path)
-    frames = []
-    max_frames = int(round(total_dur * info.fps))
-    for _ in range(max_frames):
-        ret, bgr = cap.read()
-        if not ret or bgr is None:
-            break
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        frames.append(rgb)
-    cap.release()
+    print(f"  * Target Resolution: {target_w}x{target_h} ({target_res})", flush=True)
 
-    frames_np = np.stack(frames, axis=0)
-    print(f"  * Ingested Frames  : {len(frames_np)} frames for Neural Overfitting", flush=True)
+    # 2. Compute Neural GOP Chunks
+    frames_per_chunk = int(round(chunk_duration_sec * info.fps))
+    total_frames = int(round(total_dur * info.fps))
+    total_chunks = math.ceil(total_frames / frames_per_chunk)
+    print(f"\n--- [Step 1/4] Neural GOP Partitioning ({total_chunks} chunks, {chunk_duration_sec:.1f}s each) ---", flush=True)
 
-    # 2. Extract Audio Stream
-    tmp_audio = f"{output_neura_path}.opus"
-    UniversalDemuxer.extract_audio_payload(input_path, tmp_audio, audio_track_idx=0, bitrate_kbps=audio_bitrate_kbps)
+    # Setup Checkpointing & Crash Recovery
+    chunks_dir = f"{output_neura_path}.chunks"
+    progress_file = f"{output_neura_path}.progress.json"
+    os.makedirs(chunks_dir, exist_ok=True)
+
+    completed_chunks: Dict[int, float] = {}
+    if resume and os.path.exists(progress_file):
+        try:
+            with open(progress_file, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                completed_chunks = {int(k): float(v) for k, v in saved.get("completed_chunks", {}).items()}
+                print(f"  [RESUME] Found {len(completed_chunks)} previously completed chunks. Resuming...", flush=True)
+        except Exception:
+            completed_chunks = {}
+
+    # 3. Audio Transcoding to Studio Opus
+    print(f"\n--- [Step 2/4] Audio Extraction & High-Fidelity Transcoding ---", flush=True)
+    tmp_audio = os.path.join(chunks_dir, f"audio_track_{audio_track_idx}.opus")
+    UniversalDemuxer.extract_audio_payload(input_path, tmp_audio, audio_track_idx=audio_track_idx, bitrate_kbps=audio_bitrate_kbps)
     audio_bytes = b""
     if os.path.exists(tmp_audio):
         with open(tmp_audio, "rb") as f:
             audio_bytes = f.read()
-        try:
-            os.remove(tmp_audio)
-        except Exception:
-            pass
+    print(f"  * Audio Payload    : {len(audio_bytes)/1024.0:.1f} KB (Studio Fidelity Opus)", flush=True)
 
-    # 3. Train Perceptual NeRV Video Representation
-    print(f"\n--- [Training] Overfitting Perceptual NeRV ({epochs} epochs) ---", flush=True)
-    t0 = time.perf_counter()
-    model, final_psnr = train_perceptual_nerv(
-        video_frames_rgb=frames_np,
-        device=device,
-        epochs=epochs,
-        target_h=target_h,
-        target_w=target_w,
-        prune_sparsity=0.30,
-    )
-    train_time = time.perf_counter() - t0
+    # 4. Neural Chunk Training Loop (Low RAM Footprint < 500 MB)
+    print(f"\n--- [Step 3/4] Multi-Resolution Perceptual Training ({epochs_per_chunk} epochs/chunk) ---", flush=True)
+    cap = cv2.VideoCapture(input_path)
+    t_start = time.perf_counter()
 
-    # 4. Quantize and Export to .neura 2.0 Binary Container
-    print(f"\n--- [Packaging] Quantizing INT8 Weights & Creating .neura Container ---", flush=True)
+    for k in range(total_chunks):
+        chunk_file = os.path.join(chunks_dir, f"chunk_{k:05d}.pt")
+
+        if k in completed_chunks and os.path.exists(chunk_file):
+            print(f"  [Chunk {k+1:02d}/{total_chunks:02d}] Skipped (Already trained, PSNR: {completed_chunks[k]:.2f} dB)", flush=True)
+            for _ in range(frames_per_chunk):
+                cap.read()
+            continue
+
+        chunk_frames = []
+        for _ in range(frames_per_chunk):
+            ret, bgr = cap.read()
+            if not ret or bgr is None:
+                break
+            if bgr.shape[0] != target_h or bgr.shape[1] != target_w:
+                bgr = cv2.resize(bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            chunk_frames.append(rgb)
+
+        if len(chunk_frames) == 0:
+            break
+
+        frames_np = np.stack(chunk_frames, axis=0)
+        t_chunk_start = time.perf_counter()
+
+        model, psnr = train_perceptual_nerv(
+            video_frames_rgb=frames_np,
+            device=device,
+            epochs=epochs_per_chunk,
+            target_h=target_h,
+            target_w=target_w,
+            prune_sparsity=0.30,
+        )
+
+        chunk_time = time.perf_counter() - t_chunk_start
+        completed_chunks[k] = float(psnr)
+
+        # Save quantized checkpoint
+        quantized_tensors = quantize_model(model)
+        torch.save({"tensors": quantized_tensors, "psnr": psnr}, chunk_file)
+
+        # Save progress manifest
+        manifest = {
+            "version": 2,
+            "input_path": input_path,
+            "output_path": output_neura_path,
+            "total_chunks": total_chunks,
+            "chunk_duration": chunk_duration_sec,
+            "target_res": target_res,
+            "completed_chunks": completed_chunks,
+        }
+        with open(progress_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+        del model, frames_np, chunk_frames
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        vram_mb = torch.cuda.memory_allocated() / (1024 * 1024) if torch.cuda.is_available() else 0.0
+        print(f"  [Chunk {k+1:02d}/{total_chunks:02d}] Trained in {chunk_time:.2f}s | PSNR: {psnr:.2f} dB | VRAM: {vram_mb:.1f} MB", flush=True)
+
+    cap.release()
+
+    # 5. Assemble and Finalize .neura 2.0 Binary Container
+    print("\n--- [Step 4/4] Assembling Final .neura 2.0 Binary Container & Seek Index ---", flush=True)
     writer = NeuraV2Writer(
         output_path=output_neura_path,
         video_meta={
@@ -215,44 +280,59 @@ def compress_perceptual_movie(
             "total_duration": total_dur,
         },
         model_config={
-            "hidden_layers": 7,
+            "hidden_layers": 8 if target_h > 1080 else 7,
             "hidden_features": 256,
             "omega_xy": 30.0,
             "omega_t": 10.0,
             "omega_0_hidden": 30.0,
             "final_activation": "sigmoid",
         },
-        total_chunks=1,
-        chunk_duration=float(total_dur),
+        total_chunks=len(completed_chunks),
+        chunk_duration=float(chunk_duration_sec),
         audio_bytes=audio_bytes,
         audio_codec_type=2 if audio_bytes else 0,
         audio_sample_rate=48000,
         audio_channels=2,
     )
 
-    quantized_tensors = quantize_model(model)
-    writer.append_chunk(
-        chunk_idx=0,
-        start_time=0.0,
-        end_time=float(total_dur),
-        num_frames=len(frames_np),
-        model_or_tensors=quantized_tensors,
-    )
+    for k in sorted(completed_chunks.keys()):
+        chunk_file = os.path.join(chunks_dir, f"chunk_{k:05d}.pt")
+        chunk_data = torch.load(chunk_file, map_location="cpu", weights_only=False)
+        quantized_tensors = chunk_data["tensors"]
+
+        writer.append_chunk(
+            chunk_idx=k,
+            start_time=float(k * chunk_duration_sec),
+            end_time=float((k + 1) * chunk_duration_sec),
+            num_frames=frames_per_chunk,
+            model_or_tensors=quantized_tensors,
+        )
+
     writer.finalize()
 
+    # Clean up temporary chunks directory and progress file
+    try:
+        shutil.rmtree(chunks_dir, ignore_errors=True)
+        if os.path.exists(progress_file):
+            os.remove(progress_file)
+    except Exception:
+        pass
+
+    total_time = time.perf_counter() - t_start
     final_size_mb = os.path.getsize(output_neura_path) / (1024.0 * 1024.0)
-    raw_size_gb = (info.width * info.height * 3 * len(frames_np)) / (1024.0**3)
+    raw_size_gb = (info.width * info.height * 3 * int(total_dur * info.fps)) / (1024.0**3)
     comp_ratio = (raw_size_gb * 1024.0) / max(0.01, final_size_mb)
+    avg_psnr = sum(completed_chunks.values()) / max(1, len(completed_chunks))
 
     print("=" * 80, flush=True)
     print("[SUCCESS] PERCEPTUAL CINEMA COMPRESSION COMPLETE!", flush=True)
     print("=" * 80, flush=True)
     print(f"* Output Container   : {output_neura_path}", flush=True)
-    print(f"* Container File Size: {final_size_mb:.2f} MB (Target: ~8-16 MB!)", flush=True)
+    print(f"* Container File Size: {final_size_mb:.2f} MB", flush=True)
     print(f"* Raw Uncompressed   : {raw_size_gb:.2f} GB", flush=True)
     print(f"* Compression Ratio  : {comp_ratio:.1f}x smaller", flush=True)
-    print(f"* Perceptual PSNR    : {final_psnr:.2f} dB", flush=True)
-    print(f"* Total Training Time: {train_time:.2f} seconds", flush=True)
+    print(f"* Average PSNR       : {avg_psnr:.2f} dB", flush=True)
+    print(f"* Total Pipeline Time: {total_time:.2f} seconds", flush=True)
     print("=" * 80, flush=True)
 
 
@@ -260,21 +340,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Perceptual Cinema Video Compressor (NeRV).")
     parser.add_argument("--input", type=str, default="movie_trailer_4k.mkv", help="Input video file")
     parser.add_argument("--output", type=str, default="cinema_perceptual.neura", help="Output .neura file")
-    parser.add_argument("--epochs", type=int, default=800, help="Training epochs")
-    parser.add_argument("--res", type=str, default="720p", choices=["720p", "1080p", "2160p", "4k"], help="Target rendering resolution")
-    parser.add_argument("--max_duration", type=float, default=None, help="Max duration in seconds to compress")
+    parser.add_argument("--chunk_duration", type=float, default=3.0, help="GOP chunk duration in seconds")
+    parser.add_argument("--epochs", type=int, default=500, help="Training epochs per GOP chunk")
+    parser.add_argument("--res", type=str, default="1080p", choices=["720p", "1080p", "2160p", "4k"], help="Target rendering resolution")
+    parser.add_argument("--audio_track", type=int, default=0, help="Audio track index")
     parser.add_argument("--audio_bitrate", type=int, default=320, help="Audio bitrate in kbps")
+    parser.add_argument("--max_duration", type=float, default=None, help="Max duration in seconds to compress")
+    parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint")
     args = parser.parse_args()
 
     compress_perceptual_movie(
         input_path=args.input,
         output_neura_path=args.output,
-        max_duration_sec=args.max_duration,
-        epochs=args.epochs,
+        chunk_duration_sec=args.chunk_duration,
+        epochs_per_chunk=args.epochs,
         target_res=args.res,
+        audio_track_idx=args.audio_track,
         audio_bitrate_kbps=args.audio_bitrate,
+        max_duration_sec=args.max_duration,
+        resume=args.resume,
     )
 
 
 if __name__ == "__main__":
     main()
+
