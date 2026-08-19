@@ -209,15 +209,23 @@ python scripts/launch_vlc.py --file cinema_full.neura --baseline Movie_Trailer_1
 python scripts/run_4k_stress_test.py --neura cinema_full.neura
 ```
 
-### 3. Build Standalone Portable WhatsApp Package
+### 3. Siren-Cast: Live Neural Video Streaming (WebSockets)
 ```bash
-python scripts/build_portable_dist.py --neura cinema_full.neura --output dist/
+# Terminal 1: Broadcast webcam or video file over WebSockets (ws://localhost:8765)
+python scripts/start_neural_broadcast.py --source Movie_Trailer_1080p.mp4 --port 8765
+
+# Terminal 2: Watch live continuous stream rendered at 60 FPS on GPU
+python scripts/watch_neural_stream.py --url ws://localhost:8765
+
+# Or open Siren-VLC -> Press Ctrl+N -> Siren-Cast Live -> Connect & Stream!
 ```
 
-### 4. Simulate Remote Friend Playback
+### 4. WebGPU Zero-Install In-Browser Player (Chrome / Edge)
 ```bash
-python scripts/simulate_remote_friend.py --package dist/SirenZip-Portable.zip
+# Launch the WebGPU server and auto-open browser at http://localhost:8000
+python scripts/serve_web_player.py
 ```
+*(Features: 60 FPS WGSL Shaders, 400x Analytical Continuous Zoom, Drag & Drop .neura, Split View, Live Siren-Cast Web Receiver)*
 
 ---
 

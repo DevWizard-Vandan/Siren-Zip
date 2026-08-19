@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import mmap
 import os
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -129,10 +130,24 @@ class NeuraV2Reader:
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
         if self.header.hidden_layers <= 3:
             from src.model.hash_siren_video import HashSirenVideo
+            # Dynamic probe of n_levels and log2_hashmap_size from first chunk if available
+            n_levels = 12
+            log2_hashmap_size = 16
+            if len(self.index_records) > 0:
+                rec = self.index_records[0]
+                payload_bytes = self.mm[rec.byte_offset : rec.byte_offset + rec.byte_size]
+                quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
+                # Find embedding tensors
+                embed_tensors = [q for q in quantized_tensors if "hash_grid.embeddings" in q.name]
+                if embed_tensors:
+                    n_levels = len(embed_tensors)
+                    table_len = embed_tensors[0].shape[0]
+                    log2_hashmap_size = int(round(math.log2(table_len)))
+
             model = HashSirenVideo(
-                n_levels=12,
+                n_levels=n_levels,
                 n_features_per_level=2,
-                log2_hashmap_size=16,
+                log2_hashmap_size=log2_hashmap_size,
                 hidden_features=self.header.hidden_features,
                 hidden_layers=self.header.hidden_layers,
                 out_features=3,

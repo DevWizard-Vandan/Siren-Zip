@@ -48,10 +48,13 @@ import threading
 
 from src.audio.audio_player import AudioMasterClock
 from src.filters.video_fx import VideoFXFilter
+from src.live.broadcast_server import NeuralBroadcastServer
+from src.live.stream_client import NeuralStreamClient
 from src.subtitles.subtitle_engine import SubtitleEngine
 from src.types.viewport import ViewportBounds
 from src.ui.clipper_dialog import ClipperDialog
 from src.ui.equalizer_dialog import EqualizerDialog
+from src.ui.live_stream_dialog import LiveStreamDialog
 from src.ui.open_url_dialog import OpenURLDialog
 from src.ui.osd_overlay import OSDOverlay
 from src.ui.playlist_widget import PlaylistWidget
@@ -244,6 +247,11 @@ class SirenPlayerWindow(QMainWindow):
         self.baseline_current_frame: int = -1
         self.baseline_cached_frame: Optional[np.ndarray] = None
         self.is_split_mode: bool = False
+
+        # Siren-Cast Live Streaming State
+        self.neural_stream_client: Optional[NeuralStreamClient] = None
+        self.broadcast_server: Optional[NeuralBroadcastServer] = None
+        self.is_live_stream: bool = False
 
         # Playback Timeline State
         self.is_playing: bool = False
@@ -751,12 +759,55 @@ class SirenPlayerWindow(QMainWindow):
         dlg.exec()
 
     def open_network_stream_dialog(self) -> None:
-        dlg = OpenURLDialog(self)
+        dlg = LiveStreamDialog(self, broadcast_server_ref=self.broadcast_server)
         if dlg.exec():
-            if dlg.resolved_stream_url:
+            if dlg.stream_mode == "siren_cast":
+                if dlg.resolved_stream_url:
+                    self.connect_live_neural_stream(dlg.resolved_stream_url)
+            elif dlg.resolved_stream_url:
                 self.load_media_file(dlg.resolved_stream_url)
                 if dlg.resolved_title:
                     self.osd.show_notification(f"🌐 Stream: {dlg.resolved_title[:24]}")
+
+    def connect_live_neural_stream(self, ws_url: str) -> None:
+        """Connect to real-time Siren-Cast neural stream over WebSockets."""
+        try:
+            import torch
+            # Stop existing media engines
+            self.stop()
+            if self.stream_engine is not None:
+                self.stream_engine = None
+            if self.single_engine is not None:
+                self.single_engine = None
+            if self.baseline_cap is not None:
+                self.baseline_cap.release()
+                self.baseline_cap = None
+
+            if self.neural_stream_client is not None:
+                self.neural_stream_client.stop()
+
+            self.is_live_stream = True
+            self.active_file_path = ws_url
+            self.total_duration = 0.0
+            self.current_global_time = 0.0
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.neural_stream_client = NeuralStreamClient(
+                url=ws_url,
+                device=device,
+                auto_reconnect=True,
+            )
+            self.neural_stream_client.start()
+
+            # Start playback timer for live 60 FPS rendering
+            self.is_playing = True
+            self.btn_play.setText("⏸ Pause")
+            self.playback_timer.start()
+
+            self.osd.show_notification("🔴 Connected to Siren-Cast Live Stream!")
+            self.setWindowTitle(f"🔴 LIVE Siren-Cast ({ws_url}) - Siren-VLC")
+        except Exception as e:
+            QMessageBox.critical(self, "Live Stream Error", f"Could not connect to Siren-Cast stream:\n{e}")
 
     def show_about_dialog(self) -> None:
         QMessageBox.about(
@@ -805,6 +856,11 @@ class SirenPlayerWindow(QMainWindow):
     def load_media_file(self, filepath: str) -> None:
         """Universal loader for .neura 2.0, .neura 1.0, and standard MP4/MKV files."""
         try:
+            if self.neural_stream_client is not None:
+                self.neural_stream_client.stop()
+                self.neural_stream_client = None
+                self.is_live_stream = False
+
             self.active_file_path = filepath
             if filepath.endswith(".neura"):
                 from src.player.engine import PlayerEngine
@@ -1139,7 +1195,20 @@ class SirenPlayerWindow(QMainWindow):
             tot_m, tot_s = int(self.total_duration // 60), int(self.total_duration % 60)
             self.lbl_total_time.setText(f"{tot_m:02d}:{tot_s:02d}")
 
-        if self.stream_engine is not None:
+        if self.is_live_stream and self.neural_stream_client is not None:
+            raw_rgb, tel = self.neural_stream_client.render_frame(
+                render_width=w,
+                render_height=h,
+                viewport=self.current_viewport,
+                tone_map_mode=self.tone_map_mode,
+            )
+            if raw_rgb is None:
+                return
+            hud_str = (
+                f"🔴 LIVE SIREN-CAST | {tel.get('fps', 0):.1f} FPS | "
+                f"Eval: {tel.get('eval_time_ms', 0):.1f}ms | Bitrate: {tel.get('bitrate_kbps', 0):.1f} kbps | GOP #{tel.get('chunk_idx', 0)}"
+            )
+        elif self.stream_engine is not None:
             res: StreamRenderResult = self.stream_engine.render_at_time(
                 t_global=t_sec,
                 viewport=self.current_viewport,

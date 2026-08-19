@@ -72,3 +72,7 @@ desktop.ini
 checkpoints/latest_*.pth
 runs/samples/
 runs/video_samples/
+*.chunks/
+*.progress.json
+*.neura
+*.mkv

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "cinema_full",
+    "name": "Movie Trailer 1080p (Siren-Zip 2.0 Multi-Chunk)",
+    "file": "../cinema_full.neura",
+    "description": "Full cinema trailer compressed with Neural GOPs and 0.0ms lip-sync audio"
+  },
+  {
+    "id": "my_video",
+    "name": "Short Cinema Clip (Siren-Zip 1.0)",
+    "file": "../my_video.neura",
+    "description": "Single-chunk 24 FPS continuous spatio-temporal video field"
+  }
+]

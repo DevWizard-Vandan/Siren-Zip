@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Siren-Zip: WebGPU Continuous Cinema Player</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Top Navigation & Controls -->
+        <header>
+            <div class="brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-title">Siren-VLC</span>
+                <span class="brand-badge">WebGPU</span>
+            </div>
+
+            <div class="header-controls">
+                <!-- Sample Selector -->
+                <select id="sample-select" title="Load Pre-Compiled Neural Cinema Samples">
+                    <option value="" disabled selected>📂 Load Sample Movie...</option>
+                </select>
+
+                <!-- File Picker Button -->
+                <button id="btn-open-file">
+                    <span>📁 Open .neura</span>
+                </button>
+                <input type="file" id="file-input" accept=".neura" style="display: none;">
+
+                <!-- Split View Comparison Button -->
+                <button id="btn-toggle-split" title="Toggle Split Screen Comparison">
+                    <span>🔲 Split View</span>
+                </button>
+
+                <!-- Live Stream Modal Button -->
+                <button id="btn-open-live-modal" class="btn-live" title="Connect to Live Siren-Cast Stream">
+                    <span>🔴 Live Stream</span>
+                </button>
+
+                <!-- Fullscreen Button -->
+                <button id="btn-fullscreen" title="Toggle Fullscreen (F)">
+                    <span>⛶ Fullscreen</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Viewport Container -->
+        <main id="viewport-container">
+            <!-- WebGPU Continuous Cinema Canvas -->
+            <canvas id="siren-canvas" width="1280" height="720"></canvas>
+
+            <!-- Drag & Drop Zone Overlay -->
+            <div id="drop-zone">
+                <div class="drop-icon">⚡</div>
+                <div class="drop-text">Drag & Drop .neura or .neura 2.0 Cinema Container</div>
+                <div class="drop-subtext">Zero-Install continuous neural cinema decoding directly on your GPU</div>
+                <button class="btn-primary" id="btn-browse-trigger" style="margin-top: 12px;">Browse File</button>
+            </div>
+
+            <!-- Sleek HUD Telemetry Overlay -->
+            <div id="hud-overlay">
+                <div class="hud-badge" id="hud-fps-badge">
+                    <span>⚡ 60.0 FPS | 1.2ms Compute</span>
+                </div>
+                <div class="hud-badge" id="hud-gop-badge">
+                    <span>🎬 Chunk: [01/04] | Time: 00:01.24</span>
+                </div>
+                <div class="hud-badge" id="hud-device-badge">
+                    <span>GPU: WebGPU High Performance</span>
+                </div>
+            </div>
+
+            <!-- Draggable Split View Divider -->
+            <div id="split-divider">
+                <div id="split-handle">↔</div>
+            </div>
+        </main>
+
+        <!-- Bottom Playback Control Bar -->
+        <footer>
+            <!-- Timeline Scrubber Row -->
+            <div class="timeline-row">
+                <span class="time-label" id="lbl-current-time">00:00.00</span>
+                <div class="slider-container">
+                    <input type="range" id="timeline-slider" min="0" max="10000" value="0">
+                </div>
+                <span class="time-label right" id="lbl-total-time">00:12.00</span>
+            </div>
+
+            <!-- Control Buttons & Settings Row -->
+            <div class="controls-row">
+                <!-- Left: Play/Pause, Step, Loop -->
+                <div class="controls-left">
+                    <button class="btn-primary" id="btn-play-pause">
+                        <span id="play-icon">▶ Play (Space)</span>
+                    </button>
+                    <button id="btn-step-back" title="Seek -1.0s (Left Arrow)">⏮ -1s</button>
+                    <button id="btn-step-fwd" title="Seek +1.0s (Right Arrow)">⏭ +1s</button>
+                    <button id="btn-loop-mode" title="Toggle Loop Mode">🔁 Loop: All</button>
+                </div>
+
+                <!-- Center: Speed, Tone Mapping, 400x Zoom -->
+                <div class="controls-center">
+                    <label style="font-size: 11px; color: #8b949e;">Speed:</label>
+                    <select id="sel-playback-speed">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="1.0" selected>1.0x (Normal)</option>
+                        <option value="2.0">2.0x</option>
+                        <option value="4.0">4.0x</option>
+                    </select>
+
+                    <label style="font-size: 11px; color: #8b949e; margin-left: 8px;">Color:</label>
+                    <select id="sel-tone-mapping">
+                        <option value="aces" selected>ACES Filmic (HDR)</option>
+                        <option value="reinhard">Reinhard</option>
+                        <option value="clamp">Linear Clamp</option>
+                    </select>
+
+                    <label style="font-size: 11px; color: #8b949e; margin-left: 8px;">Zoom:</label>
+                    <input type="range" id="zoom-slider" min="1.0" max="400.0" step="0.5" value="1.0" style="width: 100px;">
+                    <span class="zoom-badge" id="lbl-zoom-val">1.0x</span>
+                    <button id="btn-reset-zoom" style="padding: 3px 8px; font-size: 10px;">Reset</button>
+                </div>
+
+                <!-- Right: Snapshot, Live Status -->
+                <div class="controls-right">
+                    <button id="btn-snapshot" title="Save Instant 4K UHD Frame (S)">
+                        <span>📸 4K Shot (S)</span>
+                    </button>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Live Siren-Cast Modal Dialog -->
+    <div class="modal-backdrop" id="modal-live-stream">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">🔴 Connect to Siren-Cast Live Stream</div>
+                <button class="modal-close" id="btn-close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label style="font-size: 12px; color: #8b949e;">WebSocket Stream URL:</label>
+                <input type="text" id="txt-ws-url" value="ws://localhost:8765" placeholder="ws://<host>:<port>">
+                <p style="font-size: 11px; color: #8b949e; line-height: 1.4;">
+                    ⚡ <b>Zero-Macroblock Neural Streaming:</b> Receives differential weight tensors (~30–60 KB/s) over WebSockets and renders the continuous mathematical field live on your GPU shaders.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-modal">Cancel</button>
+                <button class="btn-live" id="btn-connect-live-stream">Connect & Stream Live</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Core Scripts -->
+    <script src="js/neura_parser.js"></script>
+    <script src="js/webgpu_engine.js"></script>
+    <script src="js/live_web_receiver.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
