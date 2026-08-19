@@ -93,9 +93,9 @@ class PerceptualNeRVVideo(nn.Module):
             nn.GELU(),
         )
 
-        # 7-Stage Progressive Upscaling:
-        # 5x9 -> 10x18 -> 20x36 -> 40x72 -> 80x144 -> 160x288 -> 320x576 -> 640x1152 -> (bilinear 1080x1920)
-        self.decoder = nn.Sequential(
+        # Progressive Upscaling Decoder:
+        # 5x9 -> 10x18 -> 20x36 -> 40x72 -> 80x144 -> 160x288 -> 320x576 -> 640x1152
+        blocks = [
             NeRVConvBlock(stem_dim, 192, scale_factor=2),  # 10x18
             NeRVConvBlock(192, 144, scale_factor=2),       # 20x36
             NeRVConvBlock(144, 96, scale_factor=2),        # 40x72
@@ -103,11 +103,20 @@ class PerceptualNeRVVideo(nn.Module):
             NeRVConvBlock(64, 48, scale_factor=2),         # 160x288
             NeRVConvBlock(48, 32, scale_factor=2),         # 320x576
             NeRVConvBlock(32, 24, scale_factor=2),         # 640x1152
-        )
+        ]
+
+        # Additional 8th stage for Native 4K UHD (640x1152 -> 1280x2304)
+        if target_height > 1080:
+            blocks.append(NeRVConvBlock(24, 16, scale_factor=2))
+            head_in = 16
+        else:
+            head_in = 24
+
+        self.decoder = nn.Sequential(*blocks)
 
         # Final Head: Outputs 3 channels (L, a, b in Oklab or R, G, B)
         self.head = nn.Sequential(
-            nn.Conv2d(24, 16, kernel_size=3, padding=1),
+            nn.Conv2d(head_in, 16, kernel_size=3, padding=1),
             nn.GELU(),
             nn.Conv2d(16, 3, kernel_size=3, padding=1),
             nn.Sigmoid(),

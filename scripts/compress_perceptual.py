@@ -154,8 +154,15 @@ def compress_perceptual_movie(
     total_dur = min(info.duration_sec, max_duration_sec) if max_duration_sec else info.duration_sec
     print(f"  * Source Video     : {info.width}x{info.height} @ {info.fps:.2f} FPS ({total_dur:.2f}s)", flush=True)
 
-    target_h = 1080 if target_res == "1080p" else 720
-    target_w = 1920 if target_res == "1080p" else 1280
+    if target_res in ("2160p", "4k", "4K"):
+        target_h = 2160
+        target_w = 3840
+    elif target_res in ("1080p", "1080", "fhd"):
+        target_h = 1080
+        target_w = 1920
+    else:
+        target_h = 720
+        target_w = 1280
 
     # Ingest frames into memory buffer
     cap = cv2.VideoCapture(input_path)
@@ -254,7 +261,7 @@ def main() -> None:
     parser.add_argument("--input", type=str, default="movie_trailer_4k.mkv", help="Input video file")
     parser.add_argument("--output", type=str, default="cinema_perceptual.neura", help="Output .neura file")
     parser.add_argument("--epochs", type=int, default=800, help="Training epochs")
-    parser.add_argument("--res", type=str, default="720p", choices=["720p", "1080p"], help="Target rendering resolution")
+    parser.add_argument("--res", type=str, default="720p", choices=["720p", "1080p", "2160p", "4k"], help="Target rendering resolution")
     parser.add_argument("--max_duration", type=float, default=None, help="Max duration in seconds to compress")
     parser.add_argument("--audio_bitrate", type=int, default=320, help="Audio bitrate in kbps")
     args = parser.parse_args()
