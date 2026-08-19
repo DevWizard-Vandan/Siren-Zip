@@ -753,7 +753,7 @@ class SirenPlayerWindow(QMainWindow):
                 render_width=w,
                 render_height=h,
                 tone_map_mode=self.tone_map_mode,
-                lod_fast=False,
+                lod_fast=self.is_playing,
             )
             raw_rgb = res.rgb_numpy
             pre_str = " (Prefetched)" if res.is_prefetched else ""
@@ -769,7 +769,7 @@ class SirenPlayerWindow(QMainWindow):
                 viewport=self.current_viewport,
                 render_width=w,
                 render_height=h,
-                lod_fast=False,
+                lod_fast=self.is_playing,
             )
             raw_rgb = res_single.rgb_numpy
             hud_str = f"⚡ SIREN-ZIP 1.0 | FPS: {self.last_fps:.1f} | Latency: {res_single.compute_time_ms:.1f}ms | Zoom: {self.current_zoom:.1f}x"

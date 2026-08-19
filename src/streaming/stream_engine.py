@@ -102,10 +102,14 @@ class StreamEngine:
         # 3. Sub-millisecond weight paging
         paging_ms, was_prefetched = self.page_chunk(chunk_idx)
 
-        # 4. Dynamic Level of Detail (LOD)
+        # 4. Dynamic Level of Detail (LOD) for Real-Time 30-60 FPS Playback
         start_eval = time.perf_counter()
-        eff_w = max(64, render_width // 2) if lod_fast else max(64, render_width)
-        eff_h = max(36, render_height // 2) if lod_fast else max(36, render_height)
+        if lod_fast:
+            eff_w = min(480, max(64, render_width // 2))
+            eff_h = min(270, max(36, render_height // 2))
+        else:
+            eff_w = max(64, render_width)
+            eff_h = max(36, render_height)
 
         # 5. Generate coordinate grid within visible viewport
         y_coords = torch.linspace(viewport.y_min, viewport.y_max, steps=eff_h, device=self.device, dtype=torch.float32)
