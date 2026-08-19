@@ -229,10 +229,12 @@ class SirenPlayerWindow(QMainWindow):
         self.equalizer_dlg.filter_changed.connect(self.on_filter_changed)
         self.equalizer_dlg.night_mode_toggled.connect(self.toggle_night_mode)
 
-        # Baseline comparison
+        # Baseline comparison & High-Speed Frame Cache
         self.baseline_cap: Optional[cv2.VideoCapture] = None
         self.baseline_fps: float = 24.0
         self.baseline_path: Optional[str] = baseline_path
+        self.baseline_current_frame: int = -1
+        self.baseline_cached_frame: Optional[np.ndarray] = None
         self.is_split_mode: bool = False
 
         # Playback Timeline State
@@ -840,9 +842,46 @@ class SirenPlayerWindow(QMainWindow):
                 fc = float(self.baseline_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 100.0)
                 self.total_duration = fc / self.baseline_fps
                 self.baseline_path = filepath
+                self.baseline_current_frame = -1
+                self.baseline_cached_frame = None
+
+                # Load embedded audio from video file for hardware A/V master sync
+                self.audio_clock.load_audio_file(filepath)
+
                 self.render_frame_at_time(self.current_global_time)
         except Exception as e:
             QMessageBox.warning(self, "Warning", f"Could not load baseline video:\n{e}")
+
+    def get_baseline_frame_at_time(self, t_sec: float) -> Optional[np.ndarray]:
+        """Decode baseline video frame with high-speed sequential caching (120+ FPS)."""
+        if self.baseline_cap is None or not self.baseline_cap.isOpened():
+            return None
+
+        target_frame = int(round(t_sec * self.baseline_fps))
+        total_frames = int(self.baseline_cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1000000)
+        target_frame = max(0, min(total_frames - 1, target_frame))
+
+        # 1. Reuse already decoded frame if at same timestamp (0.0 ms)
+        if target_frame == self.baseline_current_frame and self.baseline_cached_frame is not None:
+            return self.baseline_cached_frame
+
+        # 2. Sequential decode if advancing to next frame (< 1.0 ms, 200+ FPS)
+        if target_frame == self.baseline_current_frame + 1:
+            ret, bgr = self.baseline_cap.read()
+            if ret and bgr is not None:
+                self.baseline_current_frame = target_frame
+                self.baseline_cached_frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                return self.baseline_cached_frame
+
+        # 3. Seeking / Timeline jumping
+        self.baseline_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        ret, bgr = self.baseline_cap.read()
+        if ret and bgr is not None:
+            self.baseline_current_frame = target_frame
+            self.baseline_cached_frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            return self.baseline_cached_frame
+
+        return None
 
     # --- UI Toggles & Actions ---
 
@@ -1131,11 +1170,9 @@ class SirenPlayerWindow(QMainWindow):
             raw_rgb = res_single.rgb_numpy
             hud_str = f"⚡ SIREN-ZIP 1.0 | {self.last_fps:.1f} FPS | {res_single.compute_time_ms:.1f}ms"
         elif self.baseline_cap is not None and self.baseline_cap.isOpened():
-            pos_msec = t_sec * 1000.0
-            self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
-            ret, bgr = self.baseline_cap.read()
-            if ret and bgr is not None:
-                raw_rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            frame = self.get_baseline_frame_at_time(t_sec)
+            if frame is not None:
+                raw_rgb = frame
             else:
                 return
             hud_str = f"🎬 Baseline Video | {self.last_fps:.1f} FPS"
@@ -1159,14 +1196,7 @@ class SirenPlayerWindow(QMainWindow):
         self.lbl_hud_stats.setText(hud_str)
 
         if self.is_split_mode:
-            discrete_frame = None
-            if self.baseline_cap is not None and self.baseline_cap.isOpened():
-                pos_msec = t_sec * 1000.0
-                self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
-                ret, bgr = self.baseline_cap.read()
-                if ret and bgr is not None:
-                    discrete_frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
+            discrete_frame = self.get_baseline_frame_at_time(t_sec)
             self.split_view.update_buffers(
                 siren_rgb=final_rgb,
                 discrete_full_frame=discrete_frame,
@@ -1205,10 +1235,8 @@ class SirenPlayerWindow(QMainWindow):
             )
             raw = res.rgb_numpy
         else:
-            pos_msec = self.current_global_time * 1000.0
-            self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
-            ret, bgr = self.baseline_cap.read()
-            raw = cv2.cvtColor(cv2.resize(bgr, (shot_w, shot_h)), cv2.COLOR_BGR2RGB) if ret else np.zeros((shot_h, shot_w, 3), dtype=np.uint8)
+            frame = self.get_baseline_frame_at_time(self.current_global_time)
+            raw = cv2.resize(frame, (shot_w, shot_h)) if frame is not None else np.zeros((shot_h, shot_w, 3), dtype=np.uint8)
 
         processed = self.video_fx.apply(raw)
         bgr = cv2.cvtColor(processed, cv2.COLOR_RGB2BGR)

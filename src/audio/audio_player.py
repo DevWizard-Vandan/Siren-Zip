@@ -54,6 +54,19 @@ class AudioMasterClock(QObject):
         self._is_playing = False
         return True
 
+    def load_audio_file(self, filepath: str) -> bool:
+        """Load audio track directly from media file (e.g. .mp4, .mkv, .mp3, .wav)."""
+        self.cleanup()
+        if not filepath or not os.path.exists(filepath):
+            self.is_loaded = False
+            return False
+
+        self.player.setSource(QUrl.fromLocalFile(filepath))
+        self.audio_output.setVolume(self.current_vol)
+        self.is_loaded = True
+        self._is_playing = False
+        return True
+
     def play(self) -> None:
         """Start audio playback."""
         if self.is_loaded:
