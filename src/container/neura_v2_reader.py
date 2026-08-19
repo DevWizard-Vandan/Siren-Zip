@@ -140,22 +140,40 @@ class NeuraV2Reader:
     def create_model_shell(self, device: Union[str, torch.device] = "cuda") -> nn.Module:
         """Create single preallocated GPU model shell ready for instantaneous weight swapping."""
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
-        if self.header.hidden_layers <= 3:
-            from src.model.hash_siren_video import HashSirenVideo
-            # Dynamic probe of n_levels and log2_hashmap_size from first chunk if available
-            n_levels = 12
-            log2_hashmap_size = 16
-            if len(self.index_records) > 0:
-                rec = self.index_records[0]
-                payload_bytes = self.mm[rec.byte_offset : rec.byte_offset + rec.byte_size]
-                quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
-                # Find embedding tensors
+        
+        # Probe first chunk to determine if this is a NeRV, HashSiren, or SIREN model
+        is_nerv = False
+        is_hash = False
+        n_levels = 12
+        log2_hashmap_size = 16
+
+        if len(self.index_records) > 0:
+            rec = self.index_records[0]
+            payload_bytes = self.mm[rec.byte_offset : rec.byte_offset + rec.byte_size]
+            quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
+            tensor_names = [q.name for q in quantized_tensors]
+
+            if any("stem_mlp" in name or "decoder" in name for name in tensor_names):
+                is_nerv = True
+            elif any("hash_grid.embeddings" in name for name in tensor_names):
+                is_hash = True
                 embed_tensors = [q for q in quantized_tensors if "hash_grid.embeddings" in q.name]
                 if embed_tensors:
                     n_levels = len(embed_tensors)
                     table_len = embed_tensors[0].shape[0]
                     log2_hashmap_size = int(round(math.log2(table_len)))
 
+        if is_nerv:
+            from src.model.perceptual_nerv import PerceptualNeRVVideo
+            model = PerceptualNeRVVideo(
+                num_freqs=12,
+                stem_dim=256,
+                target_height=self.header.native_height,
+                target_width=self.header.native_width,
+                color_space="oklab",
+            )
+        elif is_hash or self.header.hidden_layers <= 3:
+            from src.model.hash_siren_video import HashSirenVideo
             model = HashSirenVideo(
                 n_levels=n_levels,
                 n_features_per_level=2,

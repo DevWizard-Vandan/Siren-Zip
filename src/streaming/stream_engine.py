@@ -121,24 +121,46 @@ class StreamEngine:
             eff_w = max(64, render_width)
             eff_h = max(36, render_height)
 
-        # 5. Generate coordinate grid within visible viewport
-        y_coords = torch.linspace(viewport.y_min, viewport.y_max, steps=eff_h, device=self.device, dtype=torch.float32)
-        x_coords = torch.linspace(viewport.x_min, viewport.x_max, steps=eff_w, device=self.device, dtype=torch.float32)
+        from src.model.perceptual_nerv import PerceptualNeRVVideo
 
-        y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing="ij")
-        t_grid = torch.full_like(x_grid, fill_value=t_local, device=self.device, dtype=torch.float32)
+        if isinstance(self.model, PerceptualNeRVVideo):
+            # Instantaneous Single-Pass Full-Frame GPU Generation (<15ms)
+            t_norm = torch.tensor([[(t_local + 1.0) * 0.5]], device=self.device, dtype=torch.float32)
+            frame_tensor = self.model(t_norm)  # (1, 3, H, W)
+            
+            # Crop to viewport if zoomed
+            if viewport.x_min != -1.0 or viewport.x_max != 1.0 or viewport.y_min != -1.0 or viewport.y_max != 1.0:
+                H_f, W_f = frame_tensor.shape[-2], frame_tensor.shape[-1]
+                x0 = int(round(max(0.0, (viewport.x_min + 1.0) * 0.5 * W_f)))
+                x1 = int(round(min(float(W_f), (viewport.x_max + 1.0) * 0.5 * W_f)))
+                y0 = int(round(max(0.0, (viewport.y_min + 1.0) * 0.5 * H_f)))
+                y1 = int(round(min(float(H_f), (viewport.y_max + 1.0) * 0.5 * H_f)))
+                frame_tensor = frame_tensor[:, :, y0:max(y0+1, y1), x0:max(x0+1, x1)]
 
-        coords_flat = torch.stack([x_grid, y_grid, t_grid], dim=-1).reshape(-1, 3)
-        total_eval_points = coords_flat.shape[0]
+            if (frame_tensor.shape[-2], frame_tensor.shape[-1]) != (eff_h, eff_w):
+                frame_tensor = torch.nn.functional.interpolate(
+                    frame_tensor, size=(eff_h, eff_w), mode="bilinear", align_corners=False
+                )
+            rgb_full = frame_tensor[0].permute(1, 2, 0)
+        else:
+            # 5. Generate coordinate grid within visible viewport
+            y_coords = torch.linspace(viewport.y_min, viewport.y_max, steps=eff_h, device=self.device, dtype=torch.float32)
+            x_coords = torch.linspace(viewport.x_min, viewport.x_max, steps=eff_w, device=self.device, dtype=torch.float32)
 
-        # 6. Batch forward inference
-        preds: list[torch.Tensor] = []
-        for start in range(0, total_eval_points, chunk_size):
-            end = min(start + chunk_size, total_eval_points)
-            batch = coords_flat[start:end]
-            preds.append(self.model(batch))
+            y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing="ij")
+            t_grid = torch.full_like(x_grid, fill_value=t_local, device=self.device, dtype=torch.float32)
 
-        rgb_full = torch.cat(preds, dim=0).reshape(eff_h, eff_w, 3)
+            coords_flat = torch.stack([x_grid, y_grid, t_grid], dim=-1).reshape(-1, 3)
+            total_eval_points = coords_flat.shape[0]
+
+            # 6. Batch forward inference
+            preds: list[torch.Tensor] = []
+            for start in range(0, total_eval_points, chunk_size):
+                end = min(start + chunk_size, total_eval_points)
+                batch = coords_flat[start:end]
+                preds.append(self.model(batch))
+
+            rgb_full = torch.cat(preds, dim=0).reshape(eff_h, eff_w, 3)
 
         # 7. Apply Color Science & Tone Mapping if needed
         if self.header.transfer_characteristics == 16:  # ST.2084 PQ
