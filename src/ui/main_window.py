@@ -40,6 +40,7 @@ from src.ui.equalizer_dialog import EqualizerDialog
 from src.ui.osd_overlay import OSDOverlay
 from src.ui.playlist_widget import PlaylistWidget
 from src.ui.split_view import SplitComparisonView
+from src.ui.telemetry_overlay import TelemetryOverlay
 from src.ui.video_canvas import ContinuousVideoCanvas
 
 DARK_STYLESHEET = """
@@ -210,8 +211,9 @@ class SirenPlayerWindow(QMainWindow):
 
         self.setup_ui()
 
-        # OSD Overlay
+        # OSD Overlay & Examiner Telemetry HUD
         self.osd = OSDOverlay(self.view_stack)
+        self.telemetry = TelemetryOverlay(self.view_stack)
 
         # 60 FPS Render Loop Timer
         self.playback_timer = QTimer(self)
@@ -274,7 +276,9 @@ class SirenPlayerWindow(QMainWindow):
         self.cmb_tone_map.currentIndexChanged.connect(self.on_tone_map_changed)
         header_layout.addWidget(self.cmb_tone_map)
 
-        header_layout.addStretch()
+        self.btn_telemetry = QPushButton("🔬 Telemetry (F12)")
+        self.btn_telemetry.clicked.connect(self.toggle_telemetry)
+        header_layout.addWidget(self.btn_telemetry)
 
         self.btn_playlist = QPushButton("📋 Playlist (P)")
         self.btn_playlist.clicked.connect(self.toggle_playlist)
@@ -448,6 +452,8 @@ class SirenPlayerWindow(QMainWindow):
             self.toggle_playlist()
         elif key == Qt.Key.Key_E:
             self.toggle_equalizer()
+        elif key == Qt.Key.Key_F12:
+            self.toggle_telemetry()
         elif key == Qt.Key.Key_Escape and self.is_fullscreen:
             self.toggle_fullscreen()
         else:
@@ -554,6 +560,15 @@ class SirenPlayerWindow(QMainWindow):
     def toggle_equalizer(self) -> None:
         self.equalizer_dlg.show()
         self.equalizer_dlg.raise_()
+
+    def toggle_telemetry(self) -> None:
+        is_vis = self.telemetry.isVisible()
+        self.telemetry.setVisible(not is_vis)
+        if not is_vis:
+            self.osd.show_notification("🔬 Examiner Telemetry: ON")
+        else:
+            self.osd.show_notification("🔬 Examiner Telemetry: OFF")
+        self.render_frame_at_time(self.current_global_time)
 
     def on_filter_changed(self, fx: VideoFXFilter) -> None:
         self.video_fx = fx
@@ -761,6 +776,22 @@ class SirenPlayerWindow(QMainWindow):
                 f"⚡ SIREN-ZIP 2.0 (Chunk [{res.chunk_idx+1:02d}/{res.total_chunks:02d}]{pre_str}) | "
                 f"FPS: {self.last_fps:.1f} | Latency: {res.eval_time_ms:.1f}ms | Zoom: {self.current_zoom:.1f}x"
             )
+
+            if self.telemetry.isVisible():
+                sz_mb = os.path.getsize(self.active_file_path) / (1024.0 * 1024.0) if self.active_file_path else 3.4
+                self.telemetry.update_telemetry(
+                    chunk_idx=res.chunk_idx,
+                    total_chunks=res.total_chunks,
+                    model_size_mb=sz_mb,
+                    master_time_sec=t_sec,
+                    local_time_norm=res.t_local,
+                    zoom_factor=self.current_zoom,
+                    culling_saved_pct=res.culling_saved_pct,
+                    paging_ms=res.paging_time_ms,
+                    eval_ms=res.eval_time_ms,
+                    omega_xy=float(self.meta.get("omega_xy", 30.0)),
+                    omega_t=float(self.meta.get("omega_t", 10.0)),
+                )
         elif self.single_engine is not None:
             alpha = min(1.0, max(0.0, t_sec / max(0.001, self.total_duration)))
             t_norm = -1.0 + 2.0 * alpha

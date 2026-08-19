@@ -36,6 +36,7 @@ def calculate_psnr(
 
 
 compute_psnr_gpu = calculate_psnr
+compute_psnr = calculate_psnr
 
 
 def _gaussian_window(window_size: int, sigma: float, channels: int, device: torch.device) -> torch.Tensor:
@@ -92,6 +93,7 @@ def calculate_ssim(
 
 
 compute_ssim_gpu = calculate_ssim
+compute_ssim = calculate_ssim
 
 
 def calculate_metrics_all(
