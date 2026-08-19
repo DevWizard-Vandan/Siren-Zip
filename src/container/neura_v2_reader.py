@@ -124,19 +124,30 @@ class NeuraV2Reader:
         state_dict = dequantize_state_dict(quantized_tensors, torch_device)
         return state_dict
 
-    def create_model_shell(self, device: Union[str, torch.device] = "cuda") -> SirenVideo:
+    def create_model_shell(self, device: Union[str, torch.device] = "cuda") -> nn.Module:
         """Create single preallocated GPU model shell ready for instantaneous weight swapping."""
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
-        model = SirenVideo(
-            in_features=3,
-            hidden_features=self.header.hidden_features,
-            hidden_layers=self.header.hidden_layers,
-            out_features=3,
-            omega_xy=self.header.omega_xy,
-            omega_t=self.header.omega_t,
-            omega_0_hidden=self.header.omega_0_hidden,
-            final_activation=self.header.final_activation,
-        )
+        if self.header.hidden_layers <= 3:
+            from src.model.hash_siren_video import HashSirenVideo
+            model = HashSirenVideo(
+                n_levels=12,
+                n_features_per_level=2,
+                log2_hashmap_size=16,
+                hidden_features=self.header.hidden_features,
+                hidden_layers=self.header.hidden_layers,
+                out_features=3,
+            )
+        else:
+            model = SirenVideo(
+                in_features=3,
+                hidden_features=self.header.hidden_features,
+                hidden_layers=self.header.hidden_layers,
+                out_features=3,
+                omega_xy=self.header.omega_xy,
+                omega_t=self.header.omega_t,
+                omega_0_hidden=self.header.omega_0_hidden,
+                final_activation=self.header.final_activation,
+            )
         model.to(torch_device)
         model.eval()
         return model
