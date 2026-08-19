@@ -141,7 +141,8 @@ class NeuraV2Reader:
         """Create single preallocated GPU model shell ready for instantaneous weight swapping."""
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
         
-        # Probe first chunk to determine if this is a NeRV, HashSiren, or SIREN model
+        # Probe first chunk to determine if this is a ConvSIREN, NeRV, HashSiren, or SIREN model
+        is_convsiren = False
         is_nerv = False
         is_hash = False
         n_levels = 12
@@ -153,7 +154,9 @@ class NeuraV2Reader:
             quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
             tensor_names = [q.name for q in quantized_tensors]
 
-            if any("stem_mlp" in name or "decoder" in name for name in tensor_names):
+            if any("temporal_embed" in name or "conv1.conv" in name for name in tensor_names):
+                is_convsiren = True
+            elif any("stem_mlp" in name or "decoder" in name for name in tensor_names):
                 is_nerv = True
             elif any("hash_grid.embeddings" in name for name in tensor_names):
                 is_hash = True
@@ -163,7 +166,18 @@ class NeuraV2Reader:
                     table_len = embed_tensors[0].shape[0]
                     log2_hashmap_size = int(round(math.log2(table_len)))
 
-        if is_nerv:
+        if is_convsiren:
+            from src.model.conv_siren_video import ConvSIRENVideo
+            # Compute total frames from base_fps and total_duration
+            total_frames = max(1, int(round(self.header.total_duration * self.header.base_fps)))
+            model = ConvSIRENVideo(
+                num_frames=total_frames,
+                latent_dim=32,
+                stem_dim=192,
+                target_height=self.header.native_height,
+                target_width=self.header.native_width,
+            )
+        elif is_nerv:
             from src.model.perceptual_nerv import PerceptualNeRVVideo
             model = PerceptualNeRVVideo(
                 num_freqs=12,

@@ -121,9 +121,31 @@ class StreamEngine:
             eff_w = max(64, render_width)
             eff_h = max(36, render_height)
 
+        from src.model.conv_siren_video import ConvSIRENVideo
         from src.model.perceptual_nerv import PerceptualNeRVVideo
 
-        if isinstance(self.model, PerceptualNeRVVideo):
+        if isinstance(self.model, ConvSIRENVideo):
+            # Instantaneous Single-Pass ConvSIREN Frame Generation (<15ms)
+            frame_idx = min(self.model.num_frames - 1, max(0, int(round(t_global * self.header.base_fps))))
+            idx_tensor = torch.tensor([frame_idx], device=self.device, dtype=torch.long)
+            frame_tensor = self.model(idx_tensor)  # (1, 3, H, W)
+
+            # Crop to viewport if zoomed
+            if viewport.x_min != -1.0 or viewport.x_max != 1.0 or viewport.y_min != -1.0 or viewport.y_max != 1.0:
+                H_f, W_f = frame_tensor.shape[-2], frame_tensor.shape[-1]
+                x0 = int(round(max(0.0, (viewport.x_min + 1.0) * 0.5 * W_f)))
+                x1 = int(round(min(float(W_f), (viewport.x_max + 1.0) * 0.5 * W_f)))
+                y0 = int(round(max(0.0, (viewport.y_min + 1.0) * 0.5 * H_f)))
+                y1 = int(round(min(float(H_f), (viewport.y_max + 1.0) * 0.5 * H_f)))
+                frame_tensor = frame_tensor[:, :, y0:max(y0+1, y1), x0:max(x0+1, x1)]
+
+            if (frame_tensor.shape[-2], frame_tensor.shape[-1]) != (eff_h, eff_w):
+                frame_tensor = torch.nn.functional.interpolate(
+                    frame_tensor, size=(eff_h, eff_w), mode="bilinear", align_corners=False
+                )
+            rgb_full = frame_tensor[0].permute(1, 2, 0)
+
+        elif isinstance(self.model, PerceptualNeRVVideo):
             # Instantaneous Single-Pass Full-Frame GPU Generation (<15ms)
             t_norm = torch.tensor([[(t_local + 1.0) * 0.5]], device=self.device, dtype=torch.float32)
             frame_tensor = self.model(t_norm)  # (1, 3, H, W)

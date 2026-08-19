@@ -1,3 +1,4 @@
+from src.model.conv_siren_video import ConvSIRENVideo
 from src.model.perceptual_nerv import PerceptualNeRVVideo
 from src.model.quantizer import (
     pack_neura_container,
@@ -13,6 +14,7 @@ __all__ = [
     "SpatioTemporalSineLayer",
     "SirenVideo",
     "PerceptualNeRVVideo",
+    "ConvSIRENVideo",
     "quantize_model",
     "pack_neura_container",
     "unpack_neura_container",
