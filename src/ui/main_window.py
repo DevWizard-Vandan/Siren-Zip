@@ -1,4 +1,4 @@
-"""Siren-VLC: Feature-Complete Universal Media Player for Implicit Neural Media (.neura)."""
+"""Siren-VLC: Universal Implicit Neural Media Player with Classic VLC UI/UX."""
 
 from __future__ import annotations
 
@@ -10,17 +10,18 @@ from typing import Any, Dict, Optional
 import cv2
 import numpy as np
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QKeyEvent, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -36,125 +37,127 @@ from src.player.neura_reader import NeuraReader
 from src.sharing.share_packer import SharePacker
 from src.streaming.stream_engine import StreamEngine, StreamRenderResult
 from src.subtitles.subtitle_engine import SubtitleEngine
+from src.ui.clipper_dialog import ClipperDialog
 from src.ui.equalizer_dialog import EqualizerDialog
+from src.ui.open_url_dialog import OpenURLDialog
 from src.ui.osd_overlay import OSDOverlay
 from src.ui.playlist_widget import PlaylistWidget
 from src.ui.split_view import SplitComparisonView
 from src.ui.telemetry_overlay import TelemetryOverlay
 from src.ui.video_canvas import ContinuousVideoCanvas
 
-DARK_STYLESHEET = """
+DARK_VLC_STYLESHEET = """
 QMainWindow {
-    background-color: #090d13;
+    background-color: #0b0f14;
     color: #e6edf3;
 }
+QMenuBar {
+    background-color: #161b22;
+    color: #c9d1d9;
+    border-bottom: 1px solid #30363d;
+    font-size: 12px;
+    padding: 2px;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected {
+    background-color: #21262d;
+    color: #58a6ff;
+}
+QMenu {
+    background-color: #161b22;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 24px;
+    border-radius: 4px;
+}
+QMenu::item:selected {
+    background-color: #00e676;
+    color: #000000;
+    font-weight: bold;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #30363d;
+    margin: 4px 8px;
+}
 QWidget {
-    background-color: #090d13;
+    background-color: #0b0f14;
     color: #e6edf3;
     font-family: 'Segoe UI', Arial, sans-serif;
 }
-QFrame#ControlCard {
+QFrame#VLCBottomBar {
     background-color: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 6px 10px;
+    border-top: 1px solid #30363d;
+    padding: 6px 12px;
 }
 QPushButton {
     background-color: #21262d;
     border: 1px solid #30363d;
-    border-radius: 6px;
     color: #c9d1d9;
-    padding: 6px 12px;
-    font-size: 13px;
+    border-radius: 5px;
+    padding: 5px 10px;
     font-weight: 600;
+    font-size: 11px;
 }
 QPushButton:hover {
     background-color: #30363d;
     border-color: #8b949e;
     color: #ffffff;
 }
-QPushButton:pressed {
-    background-color: #161b22;
-}
-QPushButton#PrimaryBtn {
+QPushButton#PlayBtn {
     background-color: #238636;
-    border: 1px solid #2ea043;
     color: #ffffff;
+    font-weight: bold;
+    border-color: #2ea043;
+    min-width: 70px;
 }
-QPushButton#PrimaryBtn:hover {
+QPushButton#PlayBtn:hover {
     background-color: #2ea043;
 }
-QPushButton#PrimaryBtn:pressed {
-    background-color: #1f7f34;
-}
-QPushButton#SpecialBtn {
-    background-color: #1f6feb;
-    border: 1px solid #388bfd;
-    color: #ffffff;
-}
-QPushButton#SpecialBtn:hover {
-    background-color: #388bfd;
-}
 QSlider::groove:horizontal {
-    border: 1px solid #30363d;
-    height: 6px;
-    background: #21262d;
-    border-radius: 3px;
+    height: 4px;
+    background: #30363d;
+    border-radius: 2px;
 }
 QSlider::sub-page:horizontal {
     background: #00e676;
-    border-radius: 3px;
+    border-radius: 2px;
 }
 QSlider::handle:horizontal {
     background: #ffffff;
     border: 2px solid #00e676;
-    width: 16px;
+    width: 14px;
     margin-top: -5px;
     margin-bottom: -5px;
-    border-radius: 8px;
+    border-radius: 7px;
 }
 QSlider::handle:horizontal:hover {
     background: #00e676;
     border-color: #ffffff;
 }
-QComboBox {
-    background-color: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 4px 8px;
-    color: #c9d1d9;
-    font-weight: 600;
-    font-size: 12px;
-}
-QComboBox:hover {
-    border-color: #8b949e;
-}
-QComboBox QAbstractItemView {
-    background-color: #161b22;
-    border: 1px solid #30363d;
-    selection-background-color: #00e676;
-    selection-color: #000000;
+QLabel#TimeLabel {
+    color: #8b949e;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
 }
 QLabel#HUDLabel {
     color: #00e676;
     font-family: 'Consolas', monospace;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: bold;
-}
-QLabel#TimeLabel {
-    color: #8b949e;
-    font-family: 'Consolas', monospace;
-    font-size: 12px;
-}
-QCheckBox {
-    color: #c9d1d9;
-    font-size: 12px;
 }
 """
 
 
 class SirenPlayerWindow(QMainWindow):
-    """Siren-VLC: Feature-Complete Universal Media Player for Neural Containers."""
+    """Siren-VLC: Universal Implicit Neural Media Player with Classic VLC Simplicity."""
 
     def __init__(
         self,
@@ -162,11 +165,11 @@ class SirenPlayerWindow(QMainWindow):
         baseline_path: Optional[str] = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("Siren-VLC 2.0 - Universal Cinema Media Player (.neura)")
-        self.resize(1340, 880)
-        self.setStyleSheet(DARK_STYLESHEET)
+        self.setWindowTitle("Siren-VLC Media Player")
+        self.resize(1280, 800)
+        self.setStyleSheet(DARK_VLC_STYLESHEET)
 
-        # Engines & Decoders
+        # State & Engines
         self.stream_engine: Optional[StreamEngine] = None
         self.single_engine: Optional[PlayerEngine] = None
         self.container_version: int = 2
@@ -180,25 +183,27 @@ class SirenPlayerWindow(QMainWindow):
         # Subtitle Engine
         self.subtitle_engine = SubtitleEngine()
 
-        # Video FX Equalizer
+        # Video Equalizer
         self.video_fx = VideoFXFilter()
-        self.equalizer_dlg = EqualizerDialog(self)
+        self.equalizer_dlg = EqualizerDialog(self, initial_fx=self.video_fx)
         self.equalizer_dlg.filter_changed.connect(self.on_filter_changed)
 
-        # Baseline Comparison
+        # Baseline comparison
         self.baseline_cap: Optional[cv2.VideoCapture] = None
-        self.baseline_path: Optional[str] = baseline_path
         self.baseline_fps: float = 24.0
-
-        # Playback State
-        self.is_playing: bool = False
-        self.current_global_time: float = 0.0
-        self.total_duration: float = 0.0
-        self.playback_speed: float = 1.0
-        self.is_looping: bool = True
+        self.baseline_path: Optional[str] = baseline_path
         self.is_split_mode: bool = False
+
+        # Playback Timeline State
+        self.is_playing: bool = False
+        self.is_looping: bool = True
+        self.current_global_time: float = 0.0
+        self.total_duration: float = 12.0
+        self.playback_speed: float = 1.0
         self.tone_map_mode: str = "aces"
         self.is_fullscreen: bool = False
+        self.is_pip_mode: bool = False
+        self.normal_geometry = self.geometry()
 
         # Viewport Navigation
         self.current_viewport = ViewportBounds()
@@ -227,72 +232,17 @@ class SirenPlayerWindow(QMainWindow):
             self.load_baseline_video(baseline_path)
 
     def setup_ui(self) -> None:
+        # 1. Classic VLC Menu Bar
+        self.setup_menu_bar()
+
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
-        self.main_layout.setContentsMargins(12, 12, 12, 12)
-        self.main_layout.setSpacing(8)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
-        # 1. Header Toolbar
-        self.header_frame = QFrame()
-        header_layout = QHBoxLayout(self.header_frame)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(8)
-
-        self.btn_open_neura = QPushButton("📂 Open Media")
-        self.btn_open_neura.setObjectName("PrimaryBtn")
-        self.btn_open_neura.clicked.connect(self.on_open_file_dialog)
-        header_layout.addWidget(self.btn_open_neura)
-
-        self.btn_open_subtitles = QPushButton("💬 Subtitles")
-        self.btn_open_subtitles.clicked.connect(self.on_open_subtitles_dialog)
-        header_layout.addWidget(self.btn_open_subtitles)
-
-        self.btn_open_baseline = QPushButton("🎬 Baseline MP4")
-        self.btn_open_baseline.clicked.connect(self.on_open_baseline_dialog)
-        header_layout.addWidget(self.btn_open_baseline)
-
-        self.btn_toggle_split = QPushButton("🔀 Split View: OFF")
-        self.btn_toggle_split.clicked.connect(self.toggle_split_mode)
-        header_layout.addWidget(self.btn_toggle_split)
-
-        self.btn_equalizer = QPushButton("🎛️ Equalizer (E)")
-        self.btn_equalizer.clicked.connect(self.toggle_equalizer)
-        header_layout.addWidget(self.btn_equalizer)
-
-        self.btn_share = QPushButton("📤 Share (WhatsApp)")
-        self.btn_share.setObjectName("SpecialBtn")
-        self.btn_share.clicked.connect(self.on_share_package)
-        header_layout.addWidget(self.btn_share)
-
-        header_layout.addSpacing(10)
-
-        lbl_hdr = QLabel("HDR / Color:")
-        lbl_hdr.setStyleSheet("color: #c9d1d9; font-weight: 600;")
-        header_layout.addWidget(lbl_hdr)
-
-        self.cmb_tone_map = QComboBox()
-        self.cmb_tone_map.addItems(["ACES Filmic (HDR)", "Reinhard-Jodie", "Reinhard", "SDR (Linear)"])
-        self.cmb_tone_map.currentIndexChanged.connect(self.on_tone_map_changed)
-        header_layout.addWidget(self.cmb_tone_map)
-
-        self.btn_telemetry = QPushButton("🔬 Telemetry (F12)")
-        self.btn_telemetry.clicked.connect(self.toggle_telemetry)
-        header_layout.addWidget(self.btn_telemetry)
-
-        self.btn_playlist = QPushButton("📋 Playlist (P)")
-        self.btn_playlist.clicked.connect(self.toggle_playlist)
-        header_layout.addWidget(self.btn_playlist)
-
-        self.btn_fullscreen = QPushButton("⛶ Fullscreen (F)")
-        self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
-        header_layout.addWidget(self.btn_fullscreen)
-
-        self.main_layout.addWidget(self.header_frame)
-
-        # 2. Central Viewport Stack
+        # 2. Central Clean Video Canvas
         self.view_stack = QStackedWidget(self)
-
         self.full_canvas = ContinuousVideoCanvas(self)
         self.full_canvas.viewport_changed.connect(self.on_viewport_changed)
         self.view_stack.addWidget(self.full_canvas)
@@ -303,126 +253,262 @@ class SirenPlayerWindow(QMainWindow):
 
         self.main_layout.addWidget(self.view_stack, stretch=1)
 
-        # 3. HUD Stats Bar
-        self.hud_card = QFrame()
-        self.hud_card.setObjectName("ControlCard")
-        hud_layout = QHBoxLayout(self.hud_card)
-        hud_layout.setContentsMargins(10, 4, 10, 4)
+        # 3. Classic VLC Bottom Control Bar
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setObjectName("VLCBottomBar")
+        bar_layout = QVBoxLayout(self.bottom_bar)
+        bar_layout.setContentsMargins(12, 6, 12, 8)
+        bar_layout.setSpacing(6)
 
-        self.lbl_hud_stats = QLabel("⚡ Siren-VLC: Ready")
-        self.lbl_hud_stats.setObjectName("HUDLabel")
-        hud_layout.addWidget(self.lbl_hud_stats)
-        hud_layout.addStretch()
-
-        self.lbl_sync_drift = QLabel("Audio Master Sync: 0.0ms drift")
-        self.lbl_sync_drift.setStyleSheet("color: #58a6ff; font-family: Consolas; font-size: 11px;")
-        hud_layout.addWidget(self.lbl_sync_drift)
-
-        self.main_layout.addWidget(self.hud_card)
-
-        # 4. Playback Controls Card
-        self.control_card = QFrame()
-        self.control_card.setObjectName("ControlCard")
-        control_layout = QVBoxLayout(self.control_card)
-        control_layout.setContentsMargins(10, 8, 10, 8)
-        control_layout.setSpacing(6)
-
-        # Timeline Scrubber
-        timeline_layout = QHBoxLayout()
-        timeline_layout.setSpacing(10)
-
+        # Line 1: Timeline Scrubber + Time Label
+        row_time = QHBoxLayout()
+        row_time.setSpacing(8)
         self.lbl_time = QLabel("00:00.000 / 00:00.000")
         self.lbl_time.setObjectName("TimeLabel")
-        timeline_layout.addWidget(self.lbl_time)
+        row_time.addWidget(self.lbl_time)
 
         self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
         self.timeline_slider.setRange(0, 10000)
         self.timeline_slider.setValue(0)
         self.timeline_slider.valueChanged.connect(self.on_timeline_slider_changed)
-        timeline_layout.addWidget(self.timeline_slider, stretch=1)
+        row_time.addWidget(self.timeline_slider, stretch=1)
+        bar_layout.addLayout(row_time)
 
-        control_layout.addLayout(timeline_layout)
+        # Line 2: VLC Control Buttons
+        row_controls = QHBoxLayout()
+        row_controls.setSpacing(6)
 
-        # Buttons, Speed, Volume & Zoom Controls
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        self.btn_prev = QPushButton("⏮ Prev")
-        self.btn_prev.clicked.connect(self.on_play_previous)
-        btn_row.addWidget(self.btn_prev)
-
-        self.btn_play_pause = QPushButton("▶ Play (Space)")
-        self.btn_play_pause.setObjectName("PrimaryBtn")
+        self.btn_play_pause = QPushButton("▶ Play")
+        self.btn_play_pause.setObjectName("PlayBtn")
         self.btn_play_pause.clicked.connect(self.toggle_play_pause)
-        btn_row.addWidget(self.btn_play_pause)
+        row_controls.addWidget(self.btn_play_pause)
 
-        self.btn_next = QPushButton("⏭ Next")
-        self.btn_next.clicked.connect(self.on_play_next)
-        btn_row.addWidget(self.btn_next)
+        btn_stop = QPushButton("⏹")
+        btn_stop.setFixedWidth(32)
+        btn_stop.clicked.connect(self.stop_playback)
+        row_controls.addWidget(btn_stop)
 
-        self.chk_loop = QCheckBox("🔁 Loop")
-        self.chk_loop.setChecked(True)
-        self.chk_loop.toggled.connect(lambda v: setattr(self, "is_looping", v))
-        btn_row.addWidget(self.chk_loop)
+        btn_prev = QPushButton("⏮")
+        btn_prev.setFixedWidth(32)
+        btn_prev.clicked.connect(self.on_play_previous)
+        row_controls.addWidget(btn_prev)
 
-        btn_row.addSpacing(10)
+        btn_next = QPushButton("⏭")
+        btn_next.setFixedWidth(32)
+        btn_next.clicked.connect(self.on_play_next)
+        row_controls.addWidget(btn_next)
 
-        # Audio Volume Controls
-        self.btn_mute = QPushButton("🔊 (M)")
-        self.btn_mute.setFixedWidth(54)
+        row_controls.addSpacing(6)
+
+        btn_fs = QPushButton("⛶")
+        btn_fs.setToolTip("Fullscreen (F)")
+        btn_fs.clicked.connect(self.toggle_fullscreen)
+        row_controls.addWidget(btn_fs)
+
+        btn_pip = QPushButton("📌 PiP")
+        btn_pip.setToolTip("Picture-in-Picture (Ctrl+P)")
+        btn_pip.clicked.connect(self.toggle_pip_mode)
+        row_controls.addWidget(btn_pip)
+
+        btn_eq = QPushButton("🎛️ EQ")
+        btn_eq.setToolTip("Equalizer & Video FX (Ctrl+E)")
+        btn_eq.clicked.connect(self.toggle_equalizer)
+        row_controls.addWidget(btn_eq)
+
+        btn_clip = QPushButton("✂️ Clip")
+        btn_clip.setToolTip("One-Click GIF/WebM Clipper (Ctrl+R)")
+        btn_clip.clicked.connect(self.open_clipper_dialog)
+        row_controls.addWidget(btn_clip)
+
+        btn_web = QPushButton("🌐 URL")
+        btn_web.setToolTip("Open YouTube / Web Stream (Ctrl+N)")
+        btn_web.clicked.connect(self.open_network_stream_dialog)
+        row_controls.addWidget(btn_web)
+
+        btn_list = QPushButton("📋 Queue")
+        btn_list.setToolTip("Playlist Dock (Ctrl+L)")
+        btn_list.clicked.connect(self.toggle_playlist)
+        row_controls.addWidget(btn_list)
+
+        row_controls.addSpacing(10)
+
+        # Volume Controls
+        self.btn_mute = QPushButton("🔊")
+        self.btn_mute.setFixedWidth(34)
         self.btn_mute.clicked.connect(self.toggle_mute)
-        btn_row.addWidget(self.btn_mute)
+        row_controls.addWidget(self.btn_mute)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
-        self.volume_slider.setFixedWidth(80)
+        self.volume_slider.setFixedWidth(75)
         self.volume_slider.valueChanged.connect(self.on_volume_changed)
-        btn_row.addWidget(self.volume_slider)
+        row_controls.addWidget(self.volume_slider)
 
-        btn_row.addSpacing(10)
+        row_controls.addStretch()
 
-        lbl_speed = QLabel("Speed:")
-        lbl_speed.setStyleSheet("color: #c9d1d9; font-weight: 600;")
-        btn_row.addWidget(lbl_speed)
+        # HUD Status Badge
+        self.lbl_hud_stats = QLabel("⚡ SIREN-ZIP 2.0 | 60 FPS | A/V 0.0ms")
+        self.lbl_hud_stats.setObjectName("HUDLabel")
+        row_controls.addWidget(self.lbl_hud_stats)
 
-        self.cmb_speed = QComboBox()
-        self.cmb_speed.addItems(["0.1x", "0.25x", "0.5x", "1.0x", "2.0x", "4.0x"])
-        self.cmb_speed.setCurrentIndex(3)
-        self.cmb_speed.currentIndexChanged.connect(self.on_speed_changed)
-        btn_row.addWidget(self.cmb_speed)
+        bar_layout.addLayout(row_controls)
+        self.main_layout.addWidget(self.bottom_bar)
 
-        btn_row.addSpacing(10)
-
-        lbl_zoom = QLabel("400X Zoom:")
-        lbl_zoom.setStyleSheet("color: #c9d1d9; font-weight: 600;")
-        btn_row.addWidget(lbl_zoom)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(1, 400)
-        self.zoom_slider.setValue(1)
-        self.zoom_slider.setFixedWidth(90)
-        self.zoom_slider.valueChanged.connect(self.on_zoom_slider_changed)
-        btn_row.addWidget(self.zoom_slider)
-
-        self.lbl_zoom_val = QLabel("1.0x")
-        self.lbl_zoom_val.setObjectName("HUDLabel")
-        btn_row.addWidget(self.lbl_zoom_val)
-
-        btn_row.addStretch()
-
-        self.btn_screenshot = QPushButton("📸 4K Shot (S)")
-        self.btn_screenshot.clicked.connect(self.take_high_res_screenshot)
-        btn_row.addWidget(self.btn_screenshot)
-
-        control_layout.addLayout(btn_row)
-        self.main_layout.addWidget(self.control_card)
-
-        # 5. Playlist Dock
+        # 4. Playlist Dock (hidden by default)
         self.playlist_dock = PlaylistWidget(self)
         self.playlist_dock.file_selected.connect(self.load_media_file)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.playlist_dock)
         self.playlist_dock.hide()
+
+    def setup_menu_bar(self) -> None:
+        menubar = self.menuBar()
+
+        # --- &Media Menu ---
+        media_menu = menubar.addMenu("&Media")
+        
+        act_open_file = QAction("Open &File...", self)
+        act_open_file.setShortcut(QKeySequence("Ctrl+O"))
+        act_open_file.triggered.connect(self.on_open_file_dialog)
+        media_menu.addAction(act_open_file)
+
+        act_open_url = QAction("Open &Network Stream (YouTube)...", self)
+        act_open_url.setShortcut(QKeySequence("Ctrl+N"))
+        act_open_url.triggered.connect(self.open_network_stream_dialog)
+        media_menu.addAction(act_open_url)
+
+        act_open_base = QAction("Open Baseline &MP4 for Comparison...", self)
+        act_open_base.triggered.connect(self.on_open_baseline_dialog)
+        media_menu.addAction(act_open_base)
+
+        media_menu.addSeparator()
+
+        act_clip = QAction("Convert / &Clip GIF & WebM...", self)
+        act_clip.setShortcut(QKeySequence("Ctrl+R"))
+        act_clip.triggered.connect(self.open_clipper_dialog)
+        media_menu.addAction(act_clip)
+
+        act_share = QAction("&Save / Share WhatsApp Bundle...", self)
+        act_share.setShortcut(QKeySequence("Ctrl+S"))
+        act_share.triggered.connect(self.on_share_package)
+        media_menu.addAction(act_share)
+
+        media_menu.addSeparator()
+
+        act_quit = QAction("&Quit", self)
+        act_quit.setShortcut(QKeySequence("Ctrl+Q"))
+        act_quit.triggered.connect(self.close)
+        media_menu.addAction(act_quit)
+
+        # --- &Playback Menu ---
+        play_menu = menubar.addMenu("&Playback")
+
+        act_play = QAction("&Play / Pause", self)
+        act_play.setShortcut(QKeySequence("Space"))
+        act_play.triggered.connect(self.toggle_play_pause)
+        play_menu.addAction(act_play)
+
+        act_stop = QAction("&Stop", self)
+        act_stop.triggered.connect(self.stop_playback)
+        play_menu.addAction(act_stop)
+
+        act_prev = QAction("&Previous Track", self)
+        act_prev.setShortcut(QKeySequence("P"))
+        act_prev.triggered.connect(self.on_play_previous)
+        play_menu.addAction(act_prev)
+
+        act_next = QAction("&Next Track", self)
+        act_next.setShortcut(QKeySequence("N"))
+        act_next.triggered.connect(self.on_play_next)
+        play_menu.addAction(act_next)
+
+        play_menu.addSeparator()
+
+        speed_menu = play_menu.addMenu("&Speed")
+        for sp in [0.25, 0.5, 1.0, 2.0, 4.0]:
+            act_sp = QAction(f"{sp}x", self)
+            act_sp.triggered.connect(lambda _, s=sp: self.set_playback_speed(s))
+            speed_menu.addAction(act_sp)
+
+        # --- &Audio Menu ---
+        audio_menu = menubar.addMenu("&Audio")
+
+        act_mute = QAction("&Mute", self)
+        act_mute.setShortcut(QKeySequence("M"))
+        act_mute.triggered.connect(self.toggle_mute)
+        audio_menu.addAction(act_mute)
+
+        act_night = QAction("&Night Mode (Dialogue Booster / Limiter)", self)
+        act_night.setShortcut(QKeySequence("Ctrl+D"))
+        act_night.setCheckable(True)
+        act_night.triggered.connect(self.toggle_night_mode)
+        audio_menu.addAction(act_night)
+
+        # --- &Video Menu ---
+        video_menu = menubar.addMenu("&Video")
+
+        act_fs = QAction("&Fullscreen", self)
+        act_fs.setShortcut(QKeySequence("F"))
+        act_fs.triggered.connect(self.toggle_fullscreen)
+        video_menu.addAction(act_fs)
+
+        act_pip = QAction("&Picture-in-Picture (Floating Mode)", self)
+        act_pip.setShortcut(QKeySequence("Ctrl+P"))
+        act_pip.triggered.connect(self.toggle_pip_mode)
+        video_menu.addAction(act_pip)
+
+        act_shot = QAction("Take &4K UHD Screenshot", self)
+        act_shot.setShortcut(QKeySequence("S"))
+        act_shot.triggered.connect(self.take_high_res_screenshot)
+        video_menu.addAction(act_shot)
+
+        act_split = QAction("Toggle &Split Comparison View", self)
+        act_split.setShortcut(QKeySequence("Ctrl+T"))
+        act_split.triggered.connect(self.toggle_split_mode)
+        video_menu.addAction(act_split)
+
+        video_menu.addSeparator()
+
+        hdr_menu = video_menu.addMenu("&HDR / Color Tone-Mapping")
+        for mode, name in [("aces", "ACES Filmic (HDR)"), ("reinhard_jodie", "Reinhard-Jodie"), ("reinhard", "Reinhard"), ("linear", "SDR Linear")]:
+            act_hdr = QAction(name, self)
+            act_hdr.triggered.connect(lambda _, m=mode, n=name: self.set_tone_mapping(m, n))
+            hdr_menu.addAction(act_hdr)
+
+        # --- &Subtitle Menu ---
+        sub_menu = menubar.addMenu("&Subtitle")
+
+        act_add_sub = QAction("&Add Subtitle File...", self)
+        act_add_sub.triggered.connect(self.on_open_subtitles_dialog)
+        sub_menu.addAction(act_add_sub)
+
+        # --- &Tools Menu ---
+        tools_menu = menubar.addMenu("&Tools")
+
+        act_eq = QAction("&Effects and Filters / Equalizer", self)
+        act_eq.setShortcut(QKeySequence("Ctrl+E"))
+        act_eq.triggered.connect(self.toggle_equalizer)
+        tools_menu.addAction(act_eq)
+
+        act_telem = QAction("Examiner &Telemetry HUD", self)
+        act_telem.setShortcut(QKeySequence("F12"))
+        act_telem.triggered.connect(self.toggle_telemetry)
+        tools_menu.addAction(act_telem)
+
+        # --- &View Menu ---
+        view_menu = menubar.addMenu("&View")
+
+        act_list = QAction("&Playlist", self)
+        act_list.setShortcut(QKeySequence("Ctrl+L"))
+        act_list.triggered.connect(self.toggle_playlist)
+        view_menu.addAction(act_list)
+
+        # --- &Help Menu ---
+        help_menu = menubar.addMenu("&Help")
+
+        act_about = QAction("&About Siren-VLC", self)
+        act_about.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(act_about)
 
     # --- Keyboard Shortcuts ---
 
@@ -454,12 +540,49 @@ class SirenPlayerWindow(QMainWindow):
             self.toggle_equalizer()
         elif key == Qt.Key.Key_F12:
             self.toggle_telemetry()
-        elif key == Qt.Key.Key_Escape and self.is_fullscreen:
-            self.toggle_fullscreen()
+        elif key == Qt.Key.Key_Escape:
+            if self.is_fullscreen:
+                self.toggle_fullscreen()
+            elif self.is_pip_mode:
+                self.toggle_pip_mode()
         else:
             super().keyPressEvent(event)
 
-    # --- Loading Handlers ---
+    # --- Dialog Openers ---
+
+    def open_clipper_dialog(self) -> None:
+        dlg = ClipperDialog(
+            self,
+            get_current_time_cb=lambda: self.current_global_time,
+            get_video_path_cb=lambda: self.baseline_path or self.active_file_path,
+        )
+        dlg.exec()
+
+    def open_network_stream_dialog(self) -> None:
+        dlg = OpenURLDialog(self)
+        if dlg.exec():
+            if dlg.resolved_stream_url:
+                self.load_media_file(dlg.resolved_stream_url)
+                if dlg.resolved_title:
+                    self.osd.show_notification(f"🌐 Stream: {dlg.resolved_title[:24]}")
+
+    def show_about_dialog(self) -> None:
+        QMessageBox.about(
+            self,
+            "About Siren-VLC",
+            "<h3>⚡ Siren-VLC 2.0 (Implicit Neural Media Player)</h3>"
+            "<p><b>Lead Architect:</b> Vandan Patel</p>"
+            "<p>Replacing discrete pixels with continuous spatio-temporal calculus.</p>"
+            "<ul>"
+            "<li>Zero-drift hardware master clock A/V sync</li>"
+            "<li>Asynchronous double-buffered CUDA streaming</li>"
+            "<li>400X infinite continuous analytical zoom</li>"
+            "<li>10-bit SMPTE ST.2084 PQ & ACES Filmic HDR</li>"
+            "</ul>"
+            "<p>Licensed under MIT Open Source.</p>",
+        )
+
+    # --- Media Loading Handlers ---
 
     def on_open_file_dialog(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(
@@ -475,8 +598,7 @@ class SirenPlayerWindow(QMainWindow):
         )
         if filepath:
             if self.subtitle_engine.load_file(filepath):
-                self.osd.show_notification(f"💬 Subtitles Loaded: {os.path.basename(filepath)}")
-                self.btn_open_subtitles.setText(f"💬 {os.path.basename(filepath)[:12]}")
+                self.osd.show_notification(f"💬 Subtitles: {os.path.basename(filepath)}")
                 self.render_frame_at_time(self.current_global_time)
 
     def on_open_baseline_dialog(self) -> None:
@@ -504,11 +626,10 @@ class SirenPlayerWindow(QMainWindow):
                     codec_str = "aac" if codec_id == 1 else ("opus" if codec_id == 2 else "mp3")
                     self.audio_clock.load_audio_data(audio_bytes, codec_type=codec_str)
 
-                    fc = self.stream_engine.header.total_chunks
-                    size_kb = os.path.getsize(filepath) / 1024.0
+                    size_mb = os.path.getsize(filepath) / (1024.0 * 1024.0)
                     w = self.stream_engine.header.native_width
                     h = self.stream_engine.header.native_height
-                    self.osd.show_notification(f"🎬 Loaded .neura 2.0 ({w}x{h} | {size_kb/1024:.2f} MB)")
+                    self.osd.show_notification(f"🎬 Loaded .neura 2.0 ({w}x{h} | {size_mb:.2f} MB)")
                 else:
                     model, meta = NeuraReader.load(filepath, device="cuda")
                     self.single_engine = PlayerEngine(model, meta, device="cuda")
@@ -517,9 +638,8 @@ class SirenPlayerWindow(QMainWindow):
                     self.total_duration = float(meta.get("frame_count", 96) / meta.get("fps", 24.0))
                     self.osd.show_notification(f"🎬 Loaded .neura 1.0 ({meta.get('file_size_kb', 0):.1f} KB)")
             else:
-                # Video file
                 self.load_baseline_video(filepath)
-                self.osd.show_notification(f"🎬 Baseline Loaded: {os.path.basename(filepath)}")
+                self.osd.show_notification(f"🎬 Loaded: {os.path.basename(filepath)}")
 
             self.current_global_time = 0.0
             self.render_frame_at_time(0.0)
@@ -534,7 +654,6 @@ class SirenPlayerWindow(QMainWindow):
             if self.baseline_cap.isOpened():
                 self.baseline_fps = float(self.baseline_cap.get(cv2.CAP_PROP_FPS) or 24.0)
                 self.baseline_path = filepath
-                self.btn_open_baseline.setText(f"🎬 Baseline: {os.path.basename(filepath)[:10]}")
                 self.render_frame_at_time(self.current_global_time)
         except Exception as e:
             QMessageBox.warning(self, "Warning", f"Could not load baseline video:\n{e}")
@@ -544,15 +663,48 @@ class SirenPlayerWindow(QMainWindow):
     def toggle_fullscreen(self) -> None:
         self.is_fullscreen = not self.is_fullscreen
         if self.is_fullscreen:
-            self.header_frame.hide()
-            self.hud_card.hide()
+            self.menuBar().hide()
+            self.bottom_bar.hide()
             self.showFullScreen()
             self.osd.show_notification("⛶ Fullscreen (Press F or Esc to exit)")
         else:
-            self.header_frame.show()
-            self.hud_card.show()
+            self.menuBar().show()
+            self.bottom_bar.show()
             self.showNormal()
             self.osd.show_notification("⛶ Windowed Mode")
+
+    def toggle_pip_mode(self) -> None:
+        """Toggle True Borderless Picture-in-Picture floating mode."""
+        self.is_pip_mode = not self.is_pip_mode
+        if self.is_pip_mode:
+            self.normal_geometry = self.geometry()
+            self.menuBar().hide()
+            self.bottom_bar.hide()
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+            self.resize(480, 270)
+            self.show()
+            self.osd.show_notification("📌 Picture-in-Picture Mode: ON")
+        else:
+            self.setWindowFlags(Qt.WindowType.Window)
+            self.menuBar().show()
+            self.bottom_bar.show()
+            self.setGeometry(self.normal_geometry)
+            self.show()
+            self.osd.show_notification("📌 Picture-in-Picture Mode: OFF")
+
+    def toggle_night_mode(self, enabled: bool) -> None:
+        self.audio_clock.set_night_mode(enabled)
+        state_str = "ON (Voice Boost + Limiter)" if enabled else "OFF"
+        self.osd.show_notification(f"🌙 Night Mode: {state_str}")
+
+    def set_tone_mapping(self, mode: str, name: str) -> None:
+        self.tone_map_mode = mode
+        self.osd.show_notification(f"🎨 Color: {name}")
+        self.render_frame_at_time(self.current_global_time)
+
+    def set_playback_speed(self, speed: float) -> None:
+        self.playback_speed = float(speed)
+        self.osd.show_notification(f"⚡ Speed: {self.playback_speed:.2f}x")
 
     def toggle_playlist(self) -> None:
         self.playlist_dock.setVisible(not self.playlist_dock.isVisible())
@@ -564,10 +716,8 @@ class SirenPlayerWindow(QMainWindow):
     def toggle_telemetry(self) -> None:
         is_vis = self.telemetry.isVisible()
         self.telemetry.setVisible(not is_vis)
-        if not is_vis:
-            self.osd.show_notification("🔬 Examiner Telemetry: ON")
-        else:
-            self.osd.show_notification("🔬 Examiner Telemetry: OFF")
+        state_str = "ON" if not is_vis else "OFF"
+        self.osd.show_notification(f"🔬 Examiner Telemetry: {state_str}")
         self.render_frame_at_time(self.current_global_time)
 
     def on_filter_changed(self, fx: VideoFXFilter) -> None:
@@ -608,38 +758,17 @@ class SirenPlayerWindow(QMainWindow):
     def on_viewport_changed(self, viewport: ViewportBounds, zoom: float) -> None:
         self.current_viewport = viewport
         self.current_zoom = zoom
-        self.lbl_zoom_val.setText(f"{zoom:.1f}x")
-        self.zoom_slider.blockSignals(True)
-        self.zoom_slider.setValue(int(zoom))
-        self.zoom_slider.blockSignals(False)
         self.render_frame_at_time(self.current_global_time)
-
-    def on_zoom_slider_changed(self, val: int) -> None:
-        zoom = float(val)
-        self.full_canvas.set_zoom(zoom)
-        self.split_view.set_zoom(zoom)
-        self.osd.show_notification(f"🔍 Zoom: {zoom:.1f}x")
 
     def toggle_split_mode(self) -> None:
         self.is_split_mode = not self.is_split_mode
         if self.is_split_mode:
             self.view_stack.setCurrentIndex(1)
-            self.btn_toggle_split.setText("🔀 Split View: ON")
-            self.btn_toggle_split.setStyleSheet("background-color: #00e676; color: #000000; font-weight: bold;")
             self.osd.show_notification("🔀 Split Comparison: ON")
         else:
             self.view_stack.setCurrentIndex(0)
-            self.btn_toggle_split.setText("🔀 Split View: OFF")
-            self.btn_toggle_split.setStyleSheet("")
             self.osd.show_notification("🔀 Split Comparison: OFF")
         self.render_frame_at_time(self.current_global_time)
-
-    def on_tone_map_changed(self, index: int) -> None:
-        modes = ["aces", "reinhard_jodie", "reinhard", "linear"]
-        if 0 <= index < len(modes):
-            self.tone_map_mode = modes[index]
-            self.osd.show_notification(f"🎨 Color: {self.cmb_tone_map.currentText()}")
-            self.render_frame_at_time(self.current_global_time)
 
     # --- Audio Controls ---
 
@@ -648,12 +777,12 @@ class SirenPlayerWindow(QMainWindow):
         if is_muted:
             self.volume_slider.setValue(100)
             self.audio_clock.set_muted(False)
-            self.btn_mute.setText("🔊 (M)")
+            self.btn_mute.setText("🔊")
             self.osd.show_notification("🔊 Unmuted (100%)")
         else:
             self.volume_slider.setValue(0)
             self.audio_clock.set_muted(True)
-            self.btn_mute.setText("🔇 (M)")
+            self.btn_mute.setText("🔇")
             self.osd.show_notification("🔇 Muted")
 
     def adjust_volume(self, delta: int) -> None:
@@ -665,10 +794,7 @@ class SirenPlayerWindow(QMainWindow):
     def on_volume_changed(self, val: int) -> None:
         vol = val / 100.0
         self.audio_clock.set_volume(vol)
-        if val == 0:
-            self.btn_mute.setText("🔇 (M)")
-        else:
-            self.btn_mute.setText("🔊 (M)")
+        self.btn_mute.setText("🔇" if val == 0 else "🔊")
 
     # --- Playback Logic ---
 
@@ -677,20 +803,32 @@ class SirenPlayerWindow(QMainWindow):
             self.is_playing = False
             self.playback_timer.stop()
             self.audio_clock.pause()
-            self.btn_play_pause.setText("▶ Play (Space)")
-            self.btn_play_pause.setObjectName("PrimaryBtn")
+            self.btn_play_pause.setText("▶ Play")
+            self.btn_play_pause.setObjectName("PlayBtn")
             self.osd.show_notification("⏸ Paused")
         else:
-            if self.stream_engine is None and self.single_engine is None:
-                QMessageBox.information(self, "Open Media", "Please open a media file or playlist item first.")
+            if self.stream_engine is None and self.single_engine is None and self.baseline_cap is None:
+                QMessageBox.information(self, "Open Media", "Please open a media file or stream first.")
                 return
             self.is_playing = True
             self.audio_clock.play()
             self.playback_timer.start()
-            self.btn_play_pause.setText("⏸ Pause (Space)")
+            self.btn_play_pause.setText("⏸ Pause")
             self.btn_play_pause.setObjectName("")
             self.osd.show_notification("▶ Playing")
         self.style().polish(self.btn_play_pause)
+
+    def stop_playback(self) -> None:
+        self.is_playing = False
+        self.playback_timer.stop()
+        self.audio_clock.stop()
+        self.current_global_time = 0.0
+        self.timeline_slider.setValue(0)
+        self.btn_play_pause.setText("▶ Play")
+        self.btn_play_pause.setObjectName("PlayBtn")
+        self.style().polish(self.btn_play_pause)
+        self.render_frame_at_time(0.0)
+        self.osd.show_notification("⏹ Stopped")
 
     def seek_relative(self, delta_sec: float) -> None:
         new_time = max(0.0, min(self.total_duration, self.current_global_time + delta_sec))
@@ -698,13 +836,7 @@ class SirenPlayerWindow(QMainWindow):
         self.audio_clock.seek(new_time)
         self.render_frame_at_time(new_time)
         sign = "+" if delta_sec > 0 else ""
-        self.osd.show_notification(f"⏩ Seek {sign}{delta_sec:.1f}s ({new_time:.1f}s / {self.total_duration:.1f}s)")
-
-    def on_speed_changed(self, index: int) -> None:
-        speeds = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0]
-        if 0 <= index < len(speeds):
-            self.playback_speed = speeds[index]
-            self.osd.show_notification(f"⚡ Speed: {self.playback_speed:.2f}x")
+        self.osd.show_notification(f"⏩ Seek {sign}{delta_sec:.1f}s")
 
     def on_timeline_slider_changed(self, value: int) -> None:
         alpha = value / 10000.0
@@ -773,8 +905,8 @@ class SirenPlayerWindow(QMainWindow):
             raw_rgb = res.rgb_numpy
             pre_str = " (Prefetched)" if res.is_prefetched else ""
             hud_str = (
-                f"⚡ SIREN-ZIP 2.0 (Chunk [{res.chunk_idx+1:02d}/{res.total_chunks:02d}]{pre_str}) | "
-                f"FPS: {self.last_fps:.1f} | Latency: {res.eval_time_ms:.1f}ms | Zoom: {self.current_zoom:.1f}x"
+                f"⚡ SIREN-ZIP 2.0 [{res.chunk_idx+1:02d}/{res.total_chunks:02d}{pre_str}] | "
+                f"{self.last_fps:.1f} FPS | {res.eval_time_ms:.1f}ms | A/V: 0.0ms"
             )
 
             if self.telemetry.isVisible():
@@ -803,7 +935,16 @@ class SirenPlayerWindow(QMainWindow):
                 lod_fast=self.is_playing,
             )
             raw_rgb = res_single.rgb_numpy
-            hud_str = f"⚡ SIREN-ZIP 1.0 | FPS: {self.last_fps:.1f} | Latency: {res_single.compute_time_ms:.1f}ms | Zoom: {self.current_zoom:.1f}x"
+            hud_str = f"⚡ SIREN-ZIP 1.0 | {self.last_fps:.1f} FPS | {res_single.compute_time_ms:.1f}ms"
+        elif self.baseline_cap is not None and self.baseline_cap.isOpened():
+            pos_msec = t_sec * 1000.0
+            self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
+            ret, bgr = self.baseline_cap.read()
+            if ret and bgr is not None:
+                raw_rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            else:
+                return
+            hud_str = f"🎬 Baseline Video | {self.last_fps:.1f} FPS"
         else:
             return
 
@@ -842,15 +983,13 @@ class SirenPlayerWindow(QMainWindow):
 
     def take_high_res_screenshot(self) -> None:
         """Render continuous mathematical coordinate field at full 4K UHD (3840x2160) and save to runs/."""
-        if self.stream_engine is None and self.single_engine is None:
+        if self.stream_engine is None and self.single_engine is None and self.baseline_cap is None:
             return
 
         os.makedirs("runs", exist_ok=True)
         shot_path = os.path.join("runs", f"screenshot_{int(time.time())}.png")
-
-        # Evaluate at 4K resolution (3840x2160)
         shot_w, shot_h = 3840, 2160
-        self.osd.show_notification(f"📸 Generating 4K Continuous Shot...")
+        self.osd.show_notification("📸 Generating 4K Continuous Shot...")
         QApplication.processEvents()
 
         if self.stream_engine is not None:
@@ -862,7 +1001,7 @@ class SirenPlayerWindow(QMainWindow):
                 tone_map_mode=self.tone_map_mode,
             )
             raw = res.rgb_numpy
-        else:
+        elif self.single_engine is not None:
             alpha = min(1.0, max(0.0, self.current_global_time / max(0.001, self.total_duration)))
             res = self.single_engine.render_viewport(
                 t_val=-1.0 + 2.0 * alpha,
@@ -871,11 +1010,15 @@ class SirenPlayerWindow(QMainWindow):
                 render_height=shot_h,
             )
             raw = res.rgb_numpy
+        else:
+            pos_msec = self.current_global_time * 1000.0
+            self.baseline_cap.set(cv2.CAP_PROP_POS_MSEC, pos_msec)
+            ret, bgr = self.baseline_cap.read()
+            raw = cv2.cvtColor(cv2.resize(bgr, (shot_w, shot_h)), cv2.COLOR_BGR2RGB) if ret else np.zeros((shot_h, shot_w, 3), dtype=np.uint8)
 
         processed = self.video_fx.apply(raw)
         bgr = cv2.cvtColor(processed, cv2.COLOR_RGB2BGR)
         cv2.imwrite(shot_path, bgr)
-
         self.osd.show_notification(f"📸 4K Shot Saved: {os.path.basename(shot_path)}", duration_ms=2500)
 
     def closeEvent(self, event) -> None:

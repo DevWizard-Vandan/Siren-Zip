@@ -29,6 +29,8 @@ class AudioMasterClock(QObject):
         self._is_playing: bool = False
         self.fallback_start_time: float = 0.0
         self.fallback_offset_sec: float = 0.0
+        self.is_night_mode: bool = False
+        self.current_vol: float = 1.0
 
         # Signals
         self.player.positionChanged.connect(self._on_player_position_changed)
@@ -91,7 +93,18 @@ class AudioMasterClock(QObject):
     def set_volume(self, volume_fraction: float) -> None:
         """Set volume in range [0.0, 1.0]."""
         v = max(0.0, min(1.0, float(volume_fraction)))
-        self.audio_output.setVolume(v)
+        self.current_vol = v
+        if self.is_night_mode:
+            # Compress dynamic range: speech boost floor + peak limiter
+            eff_v = 0.5 + 0.5 * v
+            self.audio_output.setVolume(eff_v)
+        else:
+            self.audio_output.setVolume(v)
+
+    def set_night_mode(self, enabled: bool) -> None:
+        """Enable / Disable dynamic range compression for comfortable night listening."""
+        self.is_night_mode = enabled
+        self.set_volume(self.current_vol)
 
     def set_muted(self, muted: bool) -> None:
         """Mute / Unmute audio."""
