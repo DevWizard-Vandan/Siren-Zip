@@ -74,16 +74,14 @@ def train_perceptual_nerv(
         noise_deadband=0.012,
     ).to(device)
 
-    # Dynamic batch size & gradient accumulation for 4K VRAM efficiency
+    # Dynamic batch size for optimal throughput and VRAM efficiency
     if target_h > 1080:
         micro_batch = 1
-        accum_steps = 4
     elif target_h > 720:
         micro_batch = 2
-        accum_steps = 2
     else:
         micro_batch = 4
-        accum_steps = 1
+    accum_steps = 1
 
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
