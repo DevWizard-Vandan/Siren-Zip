@@ -10,13 +10,7 @@ import torch
 import torch.nn as nn
 
 from src.model.siren_video import SirenVideo
-
-
-class ViewportBounds(NamedTuple):
-    x_min: float = -1.0
-    x_max: float = 1.0
-    y_min: float = -1.0
-    y_max: float = 1.0
+from src.types.viewport import ViewportBounds
 
 
 class RenderRequest(NamedTuple):

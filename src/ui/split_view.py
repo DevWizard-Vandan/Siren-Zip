@@ -11,7 +11,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPaintEvent, QPen, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
-from src.player.engine import ViewportBounds
+from src.types.viewport import ViewportBounds
 
 
 class SplitComparisonView(QWidget):
