@@ -1,4 +1,4 @@
-"""Neura 2.0 Container binary format specifications and dataclasses."""
+"""Neura 2.0 Container binary format specifications with Audio & HDR Multiplexing."""
 
 from __future__ import annotations
 
@@ -10,8 +10,7 @@ HEADER_V2_SIZE = 128
 MAGIC_V2_BYTES = b"NEU2"
 CURRENT_V2_VERSION = 2
 
-HEADER_V2_FORMAT = "<4s II d f II f II fff II QQ Q 40s"
-# Items:
+# Exact 128-byte layout:
 # 1. 4s: magic (4)
 # 2. I: version (4)
 # 3. I: total_chunks (4)
@@ -29,12 +28,20 @@ HEADER_V2_FORMAT = "<4s II d f II f II fff II QQ Q 40s"
 # 15. I: num_tensors_per_chunk (4)
 # 16. Q: index_table_offset (8)
 # 17. Q: index_table_size (8)
-# 18. Q: audio_offset (8)
-# 19. 40s: reserved_padding (40)
-# Sum = 4 + 4 + 4 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 8 + 8 + 8 + 40 = 128 bytes.
+# 18. I: audio_codec_type (4)
+# 19. I: audio_sample_rate (4)
+# 20. I: audio_channels (4)
+# 21. I: color_primaries (4)
+# 22. I: transfer_characteristics (4)
+# 23. Q: audio_payload_offset (8)
+# 24. Q: audio_payload_size (8)
+# 25. 12s: reserved_padding (12)
+# Sum = 4+4+4+8+4+4+4+4+4+4+4+4+4+4+4+8+8+4+4+4+4+4+8+8+12 = 128 bytes.
+
+HEADER_V2_FORMAT = "<4s II d f II f II fff II QQ IIIII QQ 12s"
 
 INDEX_RECORD_FORMAT = "<I dd I QQ"
-INDEX_RECORD_SIZE = struct.calcsize(INDEX_RECORD_FORMAT)  # 4 + 8 + 8 + 4 + 8 + 8 = 40 bytes
+INDEX_RECORD_SIZE = struct.calcsize(INDEX_RECORD_FORMAT)  # 40 bytes
 
 
 class ChunkIndexRecord(NamedTuple):
@@ -63,7 +70,13 @@ class NeuraV2Header(NamedTuple):
     num_tensors_per_chunk: int
     index_table_offset: int
     index_table_size: int
-    audio_offset: int
+    audio_codec_type: int  # 0=None, 1=AAC, 2=Opus, 3=MP3, 4=PCM
+    audio_sample_rate: int
+    audio_channels: int
+    color_primaries: int  # 1=Rec.709, 9=Rec.2020
+    transfer_characteristics: int  # 1=BT.709, 16=ST.2084 PQ, 18=HLG
+    audio_payload_offset: int
+    audio_payload_size: int
 
 
 ACTIVATION_MAP = {"clamp": 0, "sigmoid": 1, "none": 2}
@@ -86,9 +99,15 @@ def serialize_v2_header(
     num_tensors_per_chunk: int,
     index_table_offset: int,
     index_table_size: int,
-    audio_offset: int = 0,
+    audio_codec_type: int = 0,
+    audio_sample_rate: int = 48000,
+    audio_channels: int = 2,
+    color_primaries: int = 1,
+    transfer_characteristics: int = 1,
+    audio_payload_offset: int = 0,
+    audio_payload_size: int = 0,
 ) -> bytes:
-    """Serialize 128-byte aligned .neura 2.0 container header."""
+    """Serialize exact 128-byte aligned .neura 2.0 container header."""
     act_id = ACTIVATION_MAP.get(final_activation, 0)
     header_bytes = struct.pack(
         HEADER_V2_FORMAT,
@@ -109,8 +128,14 @@ def serialize_v2_header(
         int(num_tensors_per_chunk),
         int(index_table_offset),
         int(index_table_size),
-        int(audio_offset),
-        b"\x00" * 40,
+        int(audio_codec_type),
+        int(audio_sample_rate),
+        int(audio_channels),
+        int(color_primaries),
+        int(transfer_characteristics),
+        int(audio_payload_offset),
+        int(audio_payload_size),
+        b"\x00" * 12,
     )
     assert len(header_bytes) == HEADER_V2_SIZE, f"Header size must be 128 bytes, got {len(header_bytes)}"
     return header_bytes
@@ -143,7 +168,13 @@ def deserialize_v2_header(header_bytes: bytes) -> NeuraV2Header:
         num_tensors_per_chunk=unpacked[14],
         index_table_offset=unpacked[15],
         index_table_size=unpacked[16],
-        audio_offset=unpacked[17],
+        audio_codec_type=unpacked[17],
+        audio_sample_rate=unpacked[18],
+        audio_channels=unpacked[19],
+        color_primaries=unpacked[20],
+        transfer_characteristics=unpacked[21],
+        audio_payload_offset=unpacked[22],
+        audio_payload_size=unpacked[23],
     )
 
 

@@ -1,4 +1,4 @@
-"""High-Speed Memory-Mapped .neura 2.0 Streaming Reader and Sub-Millisecond Chunk Pager."""
+"""High-Speed Memory-Mapped .neura 2.0 Streaming Reader with Audio Extraction."""
 
 from __future__ import annotations
 
@@ -60,6 +60,23 @@ class NeuraV2Reader:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
+    def get_audio_payload(self) -> Tuple[bytes, int, int, int]:
+        """Extract multiplexed audio payload bytes and format descriptors.
+
+        Returns:
+            audio_bytes: Raw binary compressed audio stream (AAC/Opus/MP3).
+            audio_codec_type: 0=None, 1=AAC, 2=Opus, 3=MP3, 4=PCM.
+            sample_rate: Sample rate (e.g. 48000 Hz).
+            channels: Channel count (e.g. 2, 6, 8).
+        """
+        if self.header.audio_payload_size == 0 or self.header.audio_payload_offset == 0:
+            return b"", 0, 48000, 2
+
+        offset = self.header.audio_payload_offset
+        size = self.header.audio_payload_size
+        audio_bytes = bytes(self.mm[offset : offset + size])
+        return audio_bytes, self.header.audio_codec_type, self.header.audio_sample_rate, self.header.audio_channels
+
     def get_chunk_info(self, chunk_idx: int) -> ChunkIndexRecord:
         """Retrieve metadata record for a specific chunk index."""
         if chunk_idx < 0 or chunk_idx >= len(self.index_records):
@@ -67,27 +84,13 @@ class NeuraV2Reader:
         return self.index_records[chunk_idx]
 
     def locate_chunk_and_local_time(self, t_global: float) -> Tuple[int, ChunkIndexRecord, float]:
-        """Locate active chunk index and compute local normalized coordinate t_local in [-1.0, 1.0].
-
-        Args:
-            t_global: Global movie timestamp in seconds [0.0, total_duration].
-
-        Returns:
-            chunk_idx: Target chunk index k.
-            record: ChunkIndexRecord for chunk k.
-            t_local: Normalized local time in [-1.0, 1.0].
-        """
-        # Clamp t_global to valid range
+        """Locate active chunk index and compute local normalized coordinate t_local in [-1.0, 1.0]."""
         t_clamped = max(0.0, min(float(self.header.total_duration), float(t_global)))
-
-        # Estimate chunk index via chunk duration
         tau = max(0.001, float(self.header.chunk_duration))
         candidate_idx = min(len(self.index_records) - 1, max(0, int(t_clamped // tau)))
 
-        # Precise binary search verification
         record = self.index_records[candidate_idx]
         if not (record.start_time <= t_clamped <= record.end_time):
-            # Binary search over index records
             low, high = 0, len(self.index_records) - 1
             while low <= high:
                 mid = (low + high) // 2
@@ -101,7 +104,6 @@ class NeuraV2Reader:
                 else:
                     low = mid + 1
 
-        # Local temporal normalization: t_local in [-1.0, 1.0]
         dt = max(1e-6, record.end_time - record.start_time)
         norm_factor = (t_clamped - record.start_time) / dt
         t_local = float(max(-1.0, min(1.0, -1.0 + 2.0 * norm_factor)))

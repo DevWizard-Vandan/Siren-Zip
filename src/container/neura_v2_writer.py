@@ -1,4 +1,4 @@
-"""Streaming .neura 2.0 Binary Container Writer with Seek Index Table."""
+"""Streaming .neura 2.0 Binary Container Writer with Audio Multiplexing & HDR Metadata."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from src.utils.neura_format import QuantizedTensor, serialize_payload
 
 
 class NeuraV2Writer:
-    """Incremental writer for .neura 2.0 multi-chunk cinema containers."""
+    """Incremental writer for .neura 2.0 multi-chunk cinema containers with audio & HDR metadata."""
 
     def __init__(
         self,
@@ -31,12 +31,25 @@ class NeuraV2Writer:
         model_config: Dict[str, Any],
         total_chunks: int,
         chunk_duration: float = 3.0,
+        audio_bytes: bytes = b"",
+        audio_codec_type: int = 0,
+        audio_sample_rate: int = 48000,
+        audio_channels: int = 2,
+        color_primaries: int = 1,
+        transfer_characteristics: int = 1,
     ) -> None:
         self.output_path = output_path
         self.video_meta = video_meta
         self.model_config = model_config
         self.total_chunks = total_chunks
         self.chunk_duration = chunk_duration
+
+        self.audio_bytes = audio_bytes
+        self.audio_codec_type = int(audio_codec_type)
+        self.audio_sample_rate = int(audio_sample_rate)
+        self.audio_channels = int(audio_channels)
+        self.color_primaries = int(color_primaries)
+        self.transfer_characteristics = int(transfer_characteristics)
 
         self.native_width = int(video_meta.get("width", 1920))
         self.native_height = int(video_meta.get("height", 1080))
@@ -57,11 +70,11 @@ class NeuraV2Writer:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
         self.file_handle = open(output_path, "wb")
 
-        # Reserve 128 bytes for provisional header
+        # 1. Reserve 128 bytes for provisional header
         provisional_header = b"\x00" * HEADER_V2_SIZE
         self.file_handle.write(provisional_header)
 
-        # Index table will be placed immediately after 128-byte header
+        # 2. Index table placed immediately after header
         self.index_table_offset = HEADER_V2_SIZE
         self.index_table_size = self.total_chunks * INDEX_RECORD_SIZE
 
@@ -69,8 +82,11 @@ class NeuraV2Writer:
         provisional_index = b"\x00" * self.index_table_size
         self.file_handle.write(provisional_index)
 
-        # Payload begins after the Index Table
-        self.current_payload_offset = HEADER_V2_SIZE + self.index_table_size
+        # 3. Audio Payload Buffer placed immediately after Seek Index Table
+        self.audio_payload_offset = HEADER_V2_SIZE + self.index_table_size
+        self.audio_payload_size = len(self.audio_bytes)
+        if self.audio_payload_size > 0:
+            self.file_handle.write(self.audio_bytes)
 
     def append_chunk(
         self,
@@ -141,7 +157,13 @@ class NeuraV2Writer:
             num_tensors_per_chunk=self.num_tensors_per_chunk,
             index_table_offset=self.index_table_offset,
             index_table_size=len(index_table_bytes),
-            audio_offset=0,
+            audio_codec_type=self.audio_codec_type,
+            audio_sample_rate=self.audio_sample_rate,
+            audio_channels=self.audio_channels,
+            color_primaries=self.color_primaries,
+            transfer_characteristics=self.transfer_characteristics,
+            audio_payload_offset=self.audio_payload_offset if self.audio_payload_size > 0 else 0,
+            audio_payload_size=self.audio_payload_size,
         )
         self.file_handle.write(final_header)
 

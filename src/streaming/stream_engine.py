@@ -1,4 +1,4 @@
-"""Continuous Multi-Chunk Streaming Engine with Sub-Millisecond Weight Paging."""
+"""Continuous Multi-Chunk Streaming Engine with Audio Master Clock & HDR Tone-Mapping."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import Any, Dict, NamedTuple, Optional, Tuple, Union
 import numpy as np
 import torch
 
+from src.color.hdr_transfer import pq_to_linear, rec2020_to_rec709
+from src.color.tone_mapper import apply_tone_mapping
 from src.container.neura_v2_format import ChunkIndexRecord
 from src.container.neura_v2_reader import NeuraV2Reader
 from src.player.engine import ViewportBounds
@@ -24,12 +26,14 @@ class StreamRenderResult(NamedTuple):
     total_latency_ms: float
     zoom_factor: float
     culling_saved_pct: float
+    tone_map_mode: str
+    is_hdr_source: bool
     width: int
     height: int
 
 
 class StreamEngine:
-    """Runtime streaming engine for seamless multi-chunk continuous playback."""
+    """Runtime streaming engine for seamless multi-chunk continuous cinema playback."""
 
     def __init__(
         self,
@@ -46,7 +50,10 @@ class StreamEngine:
 
         # Performance Cache
         self.chunk_cache: Dict[int, Dict[str, torch.Tensor]] = {}
-        self.max_cached_chunks = 8  # Keep up to 8 recent chunks in memory for instant bi-directional scrubbing
+        self.max_cached_chunks = 8
+
+        # Color & HDR properties
+        self.is_hdr = bool(self.header.transfer_characteristics in (16, 18) or self.header.color_primaries == 9)
 
         # Enable TF32 for fast Tensor Core forward evaluation
         if self.device.type == "cuda":
@@ -69,7 +76,6 @@ class StreamEngine:
         else:
             state_dict = self.reader.load_chunk_state_dict(chunk_idx, device=self.device)
             if len(self.chunk_cache) >= self.max_cached_chunks:
-                # Remove oldest cached chunk
                 first_key = next(iter(self.chunk_cache))
                 del self.chunk_cache[first_key]
             self.chunk_cache[chunk_idx] = state_dict
@@ -87,22 +93,12 @@ class StreamEngine:
         viewport: ViewportBounds = ViewportBounds(),
         render_width: int = 640,
         render_height: int = 360,
+        tone_map_mode: str = "aces",
+        exposure: float = 1.0,
         lod_fast: bool = False,
         chunk_size: int = 262144,
     ) -> StreamRenderResult:
-        """Evaluate continuous spatio-temporal field at global movie timestamp t_global.
-
-        Args:
-            t_global: Global timestamp in seconds [0.0, total_duration].
-            viewport: ViewportBounds (x_min, x_max, y_min, y_max).
-            render_width: Viewport width.
-            render_height: Viewport height.
-            lod_fast: If True, uses 0.5x resolution for ultra-low latency scrubbing.
-            chunk_size: Coordinate batch size.
-
-        Returns:
-            StreamRenderResult with frame buffer and latency diagnostics.
-        """
+        """Evaluate continuous field driven by Master Clock with optional HDR tone-mapping."""
         start_total = time.perf_counter()
 
         # 1. Locate chunk and compute local coordinate t_local in [-1.0, 1.0]
@@ -116,7 +112,7 @@ class StreamEngine:
         eff_w = max(64, render_width // 2) if lod_fast else max(64, render_width)
         eff_h = max(36, render_height // 2) if lod_fast else max(36, render_height)
 
-        # 4. Generate coordinate grid within [x_min, x_max] x [y_min, y_max] at local time t_local
+        # 4. Generate coordinate grid within visible viewport
         y_coords = torch.linspace(viewport.y_min, viewport.y_max, steps=eff_h, device=self.device, dtype=torch.float32)
         x_coords = torch.linspace(viewport.x_min, viewport.x_max, steps=eff_w, device=self.device, dtype=torch.float32)
 
@@ -134,7 +130,19 @@ class StreamEngine:
             preds.append(self.model(batch))
 
         rgb_full = torch.cat(preds, dim=0).reshape(eff_h, eff_w, 3)
-        rgb_np = (rgb_full.clamp(0.0, 1.0).cpu().numpy() * 255.0).astype(np.uint8)
+
+        # 6. Apply Color Science & Tone Mapping if needed
+        if self.header.transfer_characteristics == 16:  # ST.2084 PQ
+            rgb_linear = pq_to_linear(rgb_full)
+            if self.header.color_primaries == 9:  # Rec.2020
+                rgb_linear = rec2020_to_rec709(rgb_linear)
+            rgb_mapped = apply_tone_mapping(rgb_linear, mode=tone_map_mode, exposure=exposure)
+        elif tone_map_mode != "linear":
+            rgb_mapped = apply_tone_mapping(rgb_full, mode=tone_map_mode, exposure=exposure)
+        else:
+            rgb_mapped = rgb_full.clamp(0.0, 1.0)
+
+        rgb_np = (rgb_mapped.cpu().numpy() * 255.0).astype(np.uint8)
 
         if lod_fast and (eff_w != render_width or eff_h != render_height):
             import cv2
@@ -161,6 +169,8 @@ class StreamEngine:
             total_latency_ms=total_latency_ms,
             zoom_factor=zoom_factor,
             culling_saved_pct=culling_saved_pct,
+            tone_map_mode=tone_map_mode,
+            is_hdr_source=self.is_hdr,
             width=render_width,
             height=render_height,
         )
