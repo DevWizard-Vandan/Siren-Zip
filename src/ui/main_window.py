@@ -298,6 +298,11 @@ class SirenPlayerWindow(QMainWindow):
             if neura_path and os.path.exists(neura_path):
                 self.is_split_mode = True
                 self.view_stack.setCurrentIndex(1)
+                self.render_frame_at_time(0.0)
+
+        # Auto-start playback if media file was provided on CLI
+        if (neura_path and os.path.exists(neura_path)) or (baseline_path and os.path.exists(baseline_path)):
+            self.toggle_play_pause()
 
     def setup_ui(self) -> None:
         # 1. Classic VLC Menu Bar
@@ -935,8 +940,9 @@ class SirenPlayerWindow(QMainWindow):
                 self.baseline_current_frame = -1
                 self.baseline_cached_frame = None
 
-                # Load embedded audio from video file for hardware A/V master sync
-                self.audio_clock.load_audio_file(filepath)
+                # Load embedded audio from baseline video only if audio is not already loaded
+                if not self.audio_clock.is_loaded:
+                    self.audio_clock.load_audio_file(filepath)
 
                 self.render_frame_at_time(self.current_global_time)
         except Exception as e:
@@ -1373,6 +1379,9 @@ def launch_player_app(
     app = QApplication.instance() or QApplication(sys.argv)
     window = SirenPlayerWindow(neura_path=neura_path, baseline_path=baseline_path)
     window.show()
+    window.raise_()
+    window.activateWindow()
+    print("🎬 Siren-VLC Media Player running. Close window to exit.", flush=True)
     # Asynchronously pre-warm CUDA in background so UI opens in < 200 ms with zero freeze
     threading.Thread(target=_warmup_cuda_background, daemon=True).start()
     app.exec()
