@@ -163,69 +163,72 @@ class SplitComparisonView(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        w = self.width()
-        h = self.height()
-        split_x = int(w * self.split_ratio)
+            w = self.width()
+            h = self.height()
+            split_x = int(w * self.split_ratio)
 
-        # 1. Draw Left Side (Discrete H.264 Baseline)
-        if self.discrete_rgb is not None:
-            dh, dw, _ = self.discrete_rgb.shape
-            qimg_left = QImage(self.discrete_rgb.data, dw, dh, 3 * dw, QImage.Format.Format_RGB888)
-            # Clip painter to left side
-            painter.save()
-            painter.setClipRect(0, 0, split_x, h)
-            painter.drawImage(QRectF(0, 0, w, h), qimg_left)
-            painter.restore()
-        else:
-            painter.fillRect(0, 0, split_x, h, QColor(22, 27, 34))
-            painter.setPen(QColor(139, 148, 158))
-            painter.drawText(QRectF(0, 0, split_x, h), Qt.AlignmentFlag.AlignCenter, "Load reference .mp4 to enable split comparison")
+            # 1. Draw Left Side (Discrete H.264 Baseline)
+            if self.discrete_rgb is not None:
+                dh, dw, _ = self.discrete_rgb.shape
+                qimg_left = QImage(self.discrete_rgb.data, dw, dh, 3 * dw, QImage.Format.Format_RGB888)
+                # Clip painter to left side
+                painter.save()
+                painter.setClipRect(0, 0, split_x, h)
+                painter.drawImage(QRectF(0, 0, w, h), qimg_left)
+                painter.restore()
+            else:
+                painter.fillRect(0, 0, split_x, h, QColor(22, 27, 34))
+                painter.setPen(QColor(139, 148, 158))
+                painter.drawText(QRectF(0, 0, split_x, h), Qt.AlignmentFlag.AlignCenter, "Load reference .mp4 to enable split comparison")
 
-        # 2. Draw Right Side (SIREN Continuous INR)
-        if self.siren_rgb is not None:
-            sh, sw, _ = self.siren_rgb.shape
-            qimg_right = QImage(self.siren_rgb.data, sw, sh, 3 * sw, QImage.Format.Format_RGB888)
-            painter.save()
-            painter.setClipRect(split_x, 0, w - split_x, h)
-            painter.drawImage(QRectF(0, 0, w, h), qimg_right)
-            painter.restore()
+            # 2. Draw Right Side (SIREN Continuous INR)
+            if self.siren_rgb is not None:
+                sh, sw, _ = self.siren_rgb.shape
+                qimg_right = QImage(self.siren_rgb.data, sw, sh, 3 * sw, QImage.Format.Format_RGB888)
+                painter.save()
+                painter.setClipRect(split_x, 0, w - split_x, h)
+                painter.drawImage(QRectF(0, 0, w, h), qimg_right)
+                painter.restore()
 
-        # 3. Draw Splitter Divider Line & Handle
-        pen_divider = QPen(QColor(0, 230, 118), 3)
-        painter.setPen(pen_divider)
-        painter.drawLine(split_x, 0, split_x, h)
+            # 3. Draw Splitter Divider Line & Handle
+            pen_divider = QPen(QColor(0, 230, 118), 3)
+            painter.setPen(pen_divider)
+            painter.drawLine(split_x, 0, split_x, h)
 
-        # Center Grip Handle
-        handle_w = 28
-        handle_h = 44
-        handle_y = (h - handle_h) // 2
-        painter.fillRect(split_x - handle_w // 2, handle_y, handle_w, handle_h, QColor(0, 230, 118))
-        painter.setPen(QColor(13, 17, 23))
-        font_arrows = QFont("Segoe UI", 12, QFont.Weight.Bold)
-        painter.setFont(font_arrows)
-        painter.drawText(QRectF(split_x - handle_w // 2, handle_y, handle_w, handle_h), Qt.AlignmentFlag.AlignCenter, "◀ ▶")
+            # Center Grip Handle
+            handle_w = 28
+            handle_h = 44
+            handle_y = (h - handle_h) // 2
+            painter.fillRect(split_x - handle_w // 2, handle_y, handle_w, handle_h, QColor(0, 230, 118))
+            painter.setPen(QColor(13, 17, 23))
+            font_arrows = QFont("Segoe UI", 12, QFont.Weight.Bold)
+            painter.setFont(font_arrows)
+            painter.drawText(QRectF(split_x - handle_w // 2, handle_y, handle_w, handle_h), Qt.AlignmentFlag.AlignCenter, "◀ ▶")
 
-        # 4. Top Header Badges
-        font_badge = QFont("Segoe UI", 10, QFont.Weight.Bold)
-        painter.setFont(font_badge)
+            # 4. Top Header Badges
+            font_badge = QFont("Segoe UI", 10, QFont.Weight.Bold)
+            painter.setFont(font_badge)
 
-        # Left Badge: Discrete
-        painter.fillRect(16, 14, 250, 30, QColor(200, 40, 40, 210))
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(26, 34, f"TRADITIONAL H.264 ({self.zoom_factor:.1f}X)")
+            # Left Badge: Discrete
+            painter.fillRect(16, 14, 250, 30, QColor(200, 40, 40, 210))
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(26, 34, f"TRADITIONAL H.264 ({self.zoom_factor:.1f}X)")
 
-        # Right Badge: SIREN Continuous
-        badge_right_w = 260
-        painter.fillRect(w - badge_right_w - 16, 14, badge_right_w, 30, QColor(20, 140, 60, 210))
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(w - badge_right_w - 6, 34, f"SIREN-ZIP CONTINUOUS ({self.zoom_factor:.1f}X)")
+            # Right Badge: SIREN Continuous
+            badge_right_w = 260
+            painter.fillRect(w - badge_right_w - 16, 14, badge_right_w, 30, QColor(20, 140, 60, 210))
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(w - badge_right_w - 6, 34, f"SIREN-ZIP CONTINUOUS ({self.zoom_factor:.1f}X)")
 
-        # 5. Diagnostic HUD Overlay
-        if self.hud_text:
-            painter.setPen(QColor(0, 230, 118))
-            font_hud = QFont("Consolas", 10)
-            painter.setFont(font_hud)
-            painter.drawText(16, h - 16, self.hud_text)
+            # 5. Diagnostic HUD Overlay
+            if self.hud_text:
+                painter.setPen(QColor(0, 230, 118))
+                font_hud = QFont("Consolas", 10)
+                painter.setFont(font_hud)
+                painter.drawText(16, h - 16, self.hud_text)
+        finally:
+            painter.end()

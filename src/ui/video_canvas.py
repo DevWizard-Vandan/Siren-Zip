@@ -141,28 +141,31 @@ class ContinuousVideoCanvas(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        w = self.width()
-        h = self.height()
+            w = self.width()
+            h = self.height()
 
-        # Background
-        painter.fillRect(0, 0, w, h, QColor(13, 17, 23))
+            # Background
+            painter.fillRect(0, 0, w, h, QColor(13, 17, 23))
 
-        if self.current_qimage is not None:
-            # Draw frame scaled to canvas
-            painter.drawImage(QRectF(0, 0, w, h), self.current_qimage)
-        else:
-            # Splash text if no frame loaded
-            painter.setPen(QColor(139, 148, 158))
-            font = QFont("Segoe UI", 14)
-            painter.setFont(font)
-            painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "⚡ SIREN-ZIP Continuous Field Canvas\n\nOpen a .neura container to begin playback")
+            if self.current_qimage is not None:
+                # Draw frame scaled to canvas
+                painter.drawImage(QRectF(0, 0, w, h), self.current_qimage)
+            else:
+                # Splash text if no frame loaded
+                painter.setPen(QColor(139, 148, 158))
+                font = QFont("Segoe UI", 14)
+                painter.setFont(font)
+                painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "⚡ SIREN-ZIP Continuous Field Canvas\n\nOpen a .neura container to begin playback")
 
-        # Draw HUD overlay if available
-        if self.hud_text:
-            painter.setPen(QColor(0, 230, 118))
-            font_hud = QFont("Consolas", 10)
-            painter.setFont(font_hud)
-            painter.drawText(16, 26, self.hud_text)
+            # Draw HUD overlay if available
+            if self.hud_text:
+                painter.setPen(QColor(0, 230, 118))
+                font_hud = QFont("Consolas", 10)
+                painter.setFont(font_hud)
+                painter.drawText(16, 26, self.hud_text)
+        finally:
+            painter.end()
