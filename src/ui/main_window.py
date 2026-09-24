@@ -214,6 +214,7 @@ class SirenPlayerWindow(QMainWindow):
         neura_path: Optional[str] = None,
         baseline_path: Optional[str] = None,
     ) -> None:
+        super().__init__()
         self.setWindowTitle("Siren-VLC Media Player")
         self.setAcceptDrops(True)
         self.setStyleSheet(AUTHENTIC_VLC_STYLESHEET)
