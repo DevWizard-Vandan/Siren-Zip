@@ -121,10 +121,10 @@ class StreamEngine:
             eff_w = max(64, render_width)
             eff_h = max(36, render_height)
 
-        from src.model.conv_siren_video import ConvSIRENVideo
+        from src.model.conv_siren_video import ConvSIRENVideo, FastConvSiren45x80
         from src.model.perceptual_nerv import PerceptualNeRVVideo
 
-        if isinstance(self.model, ConvSIRENVideo):
+        if isinstance(self.model, (ConvSIRENVideo, FastConvSiren45x80)):
             # Instantaneous Single-Pass ConvSIREN Frame Generation (<15ms)
             frame_idx = min(self.model.num_frames - 1, max(0, int(round(t_global * self.header.base_fps))))
             idx_tensor = torch.tensor([frame_idx], device=self.device, dtype=torch.long)

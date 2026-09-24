@@ -141,43 +141,34 @@ class NeuraV2Reader:
         """Create single preallocated GPU model shell ready for instantaneous weight swapping."""
         torch_device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
         
-        # Probe first chunk to determine if this is a ConvSIREN, NeRV, HashSiren, or SIREN model
-        is_convsiren = False
-        is_nerv = False
-        is_hash = False
-        n_levels = 12
-        log2_hashmap_size = 16
-
+        shapes: Dict[str, Tuple[int, ...]] = {}
         if len(self.index_records) > 0:
             rec = self.index_records[0]
             payload_bytes = self.mm[rec.byte_offset : rec.byte_offset + rec.byte_size]
             quantized_tensors = deserialize_payload(payload_bytes, self.header.num_tensors_per_chunk)
-            tensor_names = [q.name for q in quantized_tensors]
+            shapes = {q.name: q.shape for q in quantized_tensors}
 
-            if any("temporal_embed" in name or "conv1.conv" in name for name in tensor_names):
-                is_convsiren = True
-            elif any("stem_mlp" in name or "decoder" in name for name in tensor_names):
-                is_nerv = True
-            elif any("hash_grid.embeddings" in name for name in tensor_names):
-                is_hash = True
-                embed_tensors = [q for q in quantized_tensors if "hash_grid.embeddings" in q.name]
-                if embed_tensors:
-                    n_levels = len(embed_tensors)
-                    table_len = embed_tensors[0].shape[0]
-                    log2_hashmap_size = int(round(math.log2(table_len)))
-
-        if is_convsiren:
-            from src.model.conv_siren_video import ConvSIRENVideo
-            # Compute total frames from base_fps and total_duration
-            total_frames = max(1, int(round(self.header.total_duration * self.header.base_fps)))
-            model = ConvSIRENVideo(
-                num_frames=total_frames,
-                latent_dim=32,
-                stem_dim=192,
-                target_height=self.header.native_height,
-                target_width=self.header.native_width,
-            )
-        elif is_nerv:
+        if "temporal_embed.weight" in shapes:
+            from src.model.conv_siren_video import ConvSIRENVideo, FastConvSiren45x80
+            num_frames, latent_dim = shapes["temporal_embed.weight"]
+            stem_w = shapes.get("stem.weight", (8640, 32))
+            if stem_w[0] == 460800:
+                model = FastConvSiren45x80(
+                    num_frames=num_frames,
+                    latent_dim=latent_dim,
+                    hidden=128,
+                    target_height=self.header.native_height,
+                    target_width=self.header.native_width,
+                )
+            else:
+                model = ConvSIRENVideo(
+                    num_frames=num_frames,
+                    latent_dim=latent_dim,
+                    stem_dim=192,
+                    target_height=self.header.native_height,
+                    target_width=self.header.native_width,
+                )
+        elif "stem_mlp.0.weight" in shapes or any("decoder" in k for k in shapes):
             from src.model.perceptual_nerv import PerceptualNeRVVideo
             model = PerceptualNeRVVideo(
                 num_freqs=12,
@@ -186,8 +177,12 @@ class NeuraV2Reader:
                 target_width=self.header.native_width,
                 color_space="oklab",
             )
-        elif is_hash or self.header.hidden_layers <= 3:
+        elif "hash_grid.embeddings.0" in shapes or any("hash_grid" in k for k in shapes):
             from src.model.hash_siren_video import HashSirenVideo
+            embed_tensors = [q for q in quantized_tensors if "hash_grid.embeddings" in q.name]
+            n_levels = len(embed_tensors) if embed_tensors else 12
+            table_len = embed_tensors[0].shape[0] if embed_tensors else 65536
+            log2_hashmap_size = int(round(math.log2(table_len)))
             model = HashSirenVideo(
                 n_levels=n_levels,
                 n_features_per_level=2,
@@ -196,7 +191,22 @@ class NeuraV2Reader:
                 hidden_layers=self.header.hidden_layers,
                 out_features=3,
             )
+        elif "net.0.linear.weight" in shapes:
+            from src.model.siren_video import SirenVideo
+            out_f, in_f = shapes["net.0.linear.weight"]
+            layers = len([k for k in shapes if k.startswith("net.") and k.endswith(".linear.weight")]) - 1
+            model = SirenVideo(
+                in_features=in_f,
+                hidden_features=out_f,
+                hidden_layers=layers,
+                out_features=3,
+                omega_xy=self.header.omega_xy,
+                omega_t=self.header.omega_t,
+                omega_0_hidden=self.header.omega_0_hidden,
+                final_activation=self.header.final_activation,
+            )
         else:
+            from src.model.siren_video import SirenVideo
             model = SirenVideo(
                 in_features=3,
                 hidden_features=self.header.hidden_features,
@@ -207,6 +217,7 @@ class NeuraV2Reader:
                 omega_0_hidden=self.header.omega_0_hidden,
                 final_activation=self.header.final_activation,
             )
+
         model.to(torch_device)
         model.eval()
         return model

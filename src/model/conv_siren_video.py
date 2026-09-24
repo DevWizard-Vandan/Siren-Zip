@@ -115,3 +115,59 @@ class ConvSIRENVideo(nn.Module):
             )
 
         return rgb
+
+
+class FastConvSiren45x80(nn.Module):
+    """ConvSIREN architecture with 45x80 base grid (used for 33MB crystal-sharp representations)."""
+
+    def __init__(
+        self,
+        num_frames: int,
+        latent_dim: int = 64,
+        hidden: int = 128,
+        target_height: int = 720,
+        target_width: int = 1280,
+    ) -> None:
+        super().__init__()
+        self.num_frames = num_frames
+        self.target_height = target_height
+        self.target_width = target_width
+
+        self.temporal_embed = nn.Embedding(num_frames, latent_dim)
+        self.stem = nn.Linear(latent_dim, hidden * 45 * 80)
+        self.conv1 = SineConv2d(hidden, hidden, kernel_size=3, padding=1, omega=30.0)
+        self.up1 = nn.PixelShuffle(2)  # 32 x 90 x 160
+        self.conv2 = SineConv2d(hidden // 4, hidden, kernel_size=3, padding=1, omega=30.0)
+        self.up2 = nn.PixelShuffle(2)  # 32 x 180 x 320
+        self.conv3 = SineConv2d(hidden // 4, hidden, kernel_size=3, padding=1, omega=30.0)
+        self.up3 = nn.PixelShuffle(2)  # 32 x 360 x 640
+        self.head = nn.Sequential(
+            nn.Conv2d(hidden // 4, 32, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(32, 3, kernel_size=3, padding=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, frame_indices: torch.Tensor) -> torch.Tensor:
+        if frame_indices.dim() > 1:
+            frame_indices = frame_indices.squeeze(-1)
+        if frame_indices.dtype != torch.long:
+            frame_indices = torch.clamp(frame_indices, 0, self.num_frames - 1).long()
+
+        B = frame_indices.shape[0]
+        latents = self.temporal_embed(frame_indices)
+        stem = self.stem(latents).view(B, 128, 45, 80)
+        h = self.up1(self.conv1(stem))
+        h = self.up2(self.conv2(h))
+        h = self.up3(self.conv3(h))
+        rgb = self.head(h)
+
+        if rgb.shape[-2:] != (self.target_height, self.target_width):
+            rgb = F.interpolate(
+                rgb,
+                size=(self.target_height, self.target_width),
+                mode="bilinear",
+                align_corners=False,
+            )
+        return rgb
+
