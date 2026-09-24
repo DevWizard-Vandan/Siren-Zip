@@ -214,11 +214,20 @@ class SirenPlayerWindow(QMainWindow):
         neura_path: Optional[str] = None,
         baseline_path: Optional[str] = None,
     ) -> None:
-        super().__init__()
         self.setWindowTitle("Siren-VLC Media Player")
-        self.resize(1280, 800)
         self.setAcceptDrops(True)
         self.setStyleSheet(AUTHENTIC_VLC_STYLESHEET)
+
+        # Adaptive responsive sizing to fit within available display resolution
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            w = min(1100, max(800, int(avail.width() * 0.80)))
+            h = min(720, max(500, int(avail.height() * 0.80)))
+            self.resize(w, h)
+            self.move(avail.x() + (avail.width() - w) // 2, avail.y() + (avail.height() - h) // 2)
+        else:
+            self.resize(1024, 640)
 
         # State & Engines
         self.stream_engine: Optional[StreamEngine] = None
@@ -1381,7 +1390,20 @@ def launch_player_app(
     window.show()
     window.raise_()
     window.activateWindow()
-    print("🎬 Siren-VLC Media Player running. Close window to exit.", flush=True)
+
+    # Force Windows OS to bring GUI window to foreground over PowerShell/VS Code
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        user32 = ctypes.windll.user32
+        user32.AllowSetForegroundWindow(-1)
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002)
+        user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+    print("🎬 Siren-VLC Media Player running on screen. Close window to exit.", flush=True)
     # Asynchronously pre-warm CUDA in background so UI opens in < 200 ms with zero freeze
     threading.Thread(target=_warmup_cuda_background, daemon=True).start()
     app.exec()
