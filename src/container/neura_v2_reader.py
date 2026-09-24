@@ -170,13 +170,40 @@ class NeuraV2Reader:
                 )
         elif "stem_mlp.0.weight" in shapes or any("decoder" in k for k in shapes):
             from src.model.perceptual_nerv import PerceptualNeRVVideo
-            model = PerceptualNeRVVideo(
-                num_freqs=12,
-                stem_dim=256,
-                target_height=self.header.native_height,
-                target_width=self.header.native_width,
-                color_space="oklab",
+            num_freqs = 12
+            if "stem_mlp.0.weight" in shapes:
+                in_dim = shapes["stem_mlp.0.weight"][1]
+                num_freqs = max(1, (in_dim - 1) // 2)
+
+            mlp_dim1 = shapes.get("stem_mlp.0.weight", (256, 25))[0]
+            mlp_dim2 = shapes.get("stem_mlp.2.weight", (512, 256))[0]
+
+            stem_w = shapes.get("stem_mlp.4.weight", (11520, 512))
+            stem_dim = stem_w[0] // 45
+
+            decoder_keys = sorted(
+                [k for k in shapes if k.startswith("decoder.") and k.endswith(".conv.weight")],
+                key=lambda x: int(x.split(".")[1]),
             )
+            if decoder_keys and (stem_dim < 256 or mlp_dim1 != 256 or mlp_dim2 != 512):
+                channels = [stem_dim] + [shapes[k][0] // 4 for k in decoder_keys]
+                model = PerceptualNeRVVideo(
+                    num_freqs=num_freqs,
+                    stem_dim=stem_dim,
+                    target_height=self.header.native_height,
+                    target_width=self.header.native_width,
+                    color_space="rgb",
+                    channels=channels,
+                    mlp_dims=(mlp_dim1, mlp_dim2),
+                )
+            else:
+                model = PerceptualNeRVVideo(
+                    num_freqs=num_freqs,
+                    stem_dim=stem_dim,
+                    target_height=self.header.native_height,
+                    target_width=self.header.native_width,
+                    color_space="oklab",
+                )
         elif "hash_grid.embeddings.0" in shapes or any("hash_grid" in k for k in shapes):
             from src.model.hash_siren_video import HashSirenVideo
             embed_tensors = [q for q in quantized_tensors if "hash_grid.embeddings" in q.name]

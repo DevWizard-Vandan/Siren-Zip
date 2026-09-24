@@ -69,6 +69,8 @@ class PerceptualNeRVVideo(nn.Module):
         target_height: int = 1080,
         target_width: int = 1920,
         color_space: str = "oklab",
+        channels: Optional[List[int]] = None,
+        mlp_dims: Optional[Tuple[int, int]] = None,
     ) -> None:
         super().__init__()
         self.target_height = target_height
@@ -83,36 +85,47 @@ class PerceptualNeRVVideo(nn.Module):
         self.base_w = 9
         self.stem_dim = stem_dim
 
+        dim1, dim2 = mlp_dims if mlp_dims else (256, 512)
+
         # MLP projection from 1D time encoding to 2D feature map
         self.stem_mlp = nn.Sequential(
-            nn.Linear(in_dim, 256),
+            nn.Linear(in_dim, dim1),
             nn.GELU(),
-            nn.Linear(256, 512),
+            nn.Linear(dim1, dim2),
             nn.GELU(),
-            nn.Linear(512, stem_dim * self.base_h * self.base_w),
+            nn.Linear(dim2, stem_dim * self.base_h * self.base_w),
             nn.GELU(),
         )
 
-        # Progressive Upscaling Decoder:
-        # 5x9 -> 10x18 -> 20x36 -> 40x72 -> 80x144 -> 160x288 -> 320x576 -> 640x1152
-        blocks = [
-            NeRVConvBlock(stem_dim, 192, scale_factor=2),  # 10x18
-            NeRVConvBlock(192, 144, scale_factor=2),       # 20x36
-            NeRVConvBlock(144, 96, scale_factor=2),        # 40x72
-            NeRVConvBlock(96, 64, scale_factor=2),         # 80x144
-            NeRVConvBlock(64, 48, scale_factor=2),         # 160x288
-            NeRVConvBlock(48, 32, scale_factor=2),         # 320x576
-            NeRVConvBlock(32, 24, scale_factor=2),         # 640x1152
-        ]
-
-        # Additional 8th stage for Native 4K UHD (640x1152 -> 1280x2304)
-        if target_height > 1080:
-            blocks.append(NeRVConvBlock(24, 16, scale_factor=2))
-            head_in = 16
+        if channels is not None:
+            blocks = []
+            c_in = stem_dim
+            for c_out in channels[1:]:
+                blocks.append(NeRVConvBlock(c_in, c_out, scale_factor=2))
+                c_in = c_out
+            self.decoder = nn.Sequential(*blocks)
+            head_in = c_in
         else:
-            head_in = 24
+            # Progressive Upscaling Decoder:
+            # 5x9 -> 10x18 -> 20x36 -> 40x72 -> 80x144 -> 160x288 -> 320x576 -> 640x1152
+            blocks = [
+                NeRVConvBlock(stem_dim, 192, scale_factor=2),  # 10x18
+                NeRVConvBlock(192, 144, scale_factor=2),       # 20x36
+                NeRVConvBlock(144, 96, scale_factor=2),        # 40x72
+                NeRVConvBlock(96, 64, scale_factor=2),         # 80x144
+                NeRVConvBlock(64, 48, scale_factor=2),         # 160x288
+                NeRVConvBlock(48, 32, scale_factor=2),         # 320x576
+                NeRVConvBlock(32, 24, scale_factor=2),         # 640x1152
+            ]
 
-        self.decoder = nn.Sequential(*blocks)
+            # Additional 8th stage for Native 4K UHD (640x1152 -> 1280x2304)
+            if target_height > 1080:
+                blocks.append(NeRVConvBlock(24, 16, scale_factor=2))
+                head_in = 16
+            else:
+                head_in = 24
+
+            self.decoder = nn.Sequential(*blocks)
 
         # Final Head: Outputs 3 channels (L, a, b in Oklab or R, G, B)
         self.head = nn.Sequential(
@@ -122,7 +135,7 @@ class PerceptualNeRVVideo(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, t: torch.Tensor, target_size: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         """Forward pass: maps timestamp tensor (B, 1) in [0, 1] to full RGB frame tensor (B, 3, H, W)."""
         B = t.shape[0]
 
@@ -134,13 +147,14 @@ class PerceptualNeRVVideo(nn.Module):
 
         # 3. Transposed / PixelShuffle 2D Convolution Decoder
         features = self.decoder(stem)
-        raw_output = self.head(features)  # (B, 3, 640, 1152)
+        raw_output = self.head(features)
 
-        # 4. Bilinear target resolution alignment to (target_height, target_width)
-        if raw_output.shape[-2:] != (self.target_height, self.target_width):
+        # 4. Bilinear target resolution alignment
+        target_res = (self.target_height, self.target_width) if target_size is None else target_size
+        if target_res is not None and raw_output.shape[-2:] != target_res:
             raw_output = F.interpolate(
                 raw_output,
-                size=(self.target_height, self.target_width),
+                size=target_res,
                 mode="bilinear",
                 align_corners=False,
             )
