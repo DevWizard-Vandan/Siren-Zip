@@ -277,6 +277,7 @@ class SirenPlayerWindow(QMainWindow):
         self.fps_frame_count: int = 0
         self.fps_start_time: float = time.perf_counter()
         self.last_fps: float = 0.0
+        self._is_rendering: bool = False
 
         self.setup_ui()
 
@@ -294,6 +295,9 @@ class SirenPlayerWindow(QMainWindow):
             self.playlist_dock.add_file(neura_path)
         if baseline_path and os.path.exists(baseline_path):
             self.load_baseline_video(baseline_path)
+            if neura_path and os.path.exists(neura_path):
+                self.is_split_mode = True
+                self.view_stack.setCurrentIndex(1)
 
     def setup_ui(self) -> None:
         # 1. Classic VLC Menu Bar
@@ -867,10 +871,17 @@ class SirenPlayerWindow(QMainWindow):
                 from src.player.neura_reader import NeuraReader
                 from src.streaming.stream_engine import StreamEngine
 
+                # Release any baseline video if not in split mode
+                if not self.is_split_mode and self.baseline_cap is not None:
+                    self.baseline_cap.release()
+                    self.baseline_cap = None
+
                 ver = NeuraReader.detect_version(filepath)
                 self.container_version = ver
 
                 if ver == 2:
+                    if self.stream_engine is not None:
+                        self.stream_engine.close()
                     self.stream_engine = StreamEngine(filepath, device="cuda")
                     self.single_engine = None
                     self.meta = self.stream_engine.header._asdict()
@@ -888,11 +899,21 @@ class SirenPlayerWindow(QMainWindow):
                 else:
                     model, meta = NeuraReader.load(filepath, device="cuda")
                     self.single_engine = PlayerEngine(model, meta, device="cuda")
-                    self.stream_engine = None
+                    if self.stream_engine is not None:
+                        self.stream_engine.close()
+                        self.stream_engine = None
                     self.meta = meta
                     self.total_duration = float(meta.get("frame_count", 96) / meta.get("fps", 24.0))
                     self.osd.show_notification(f"🎬 Loaded .neura 1.0 ({meta.get('file_size_kb', 0):.1f} KB)")
             else:
+                # Standard video file (.mp4, .mkv, .avi, .mov, etc.)
+                if self.stream_engine is not None:
+                    self.stream_engine.close()
+                    self.stream_engine = None
+                self.single_engine = None
+                if self.is_split_mode:
+                    self.is_split_mode = False
+                    self.view_stack.setCurrentIndex(0)
                 self.load_baseline_video(filepath)
                 self.osd.show_notification(f"🎬 Loaded: {os.path.basename(filepath)}")
 
@@ -1150,7 +1171,7 @@ class SirenPlayerWindow(QMainWindow):
             self.stop_playback()
 
     def on_timer_tick(self) -> None:
-        if not self.is_playing:
+        if not self.is_playing or self._is_rendering:
             return
 
         # Handle A-B Loop boundary
@@ -1161,7 +1182,11 @@ class SirenPlayerWindow(QMainWindow):
 
         if self.audio_clock.is_loaded:
             t_master = self.audio_clock.get_master_time()
-            self.current_global_time = t_master
+            if t_master > 0.0 or not self.audio_clock.is_playing():
+                self.current_global_time = t_master
+            else:
+                dt = (1.0 / 60.0) * self.playback_speed
+                self.current_global_time += dt
         else:
             dt = (1.0 / 60.0) * self.playback_speed
             self.current_global_time += dt
@@ -1175,7 +1200,11 @@ class SirenPlayerWindow(QMainWindow):
         self.timeline_slider.setValue(int(alpha * 10000))
         self.timeline_slider.blockSignals(False)
 
-        self.render_frame_at_time(self.current_global_time)
+        self._is_rendering = True
+        try:
+            self.render_frame_at_time(self.current_global_time)
+        finally:
+            self._is_rendering = False
 
     # --- Frame Rendering ---
 

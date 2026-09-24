@@ -45,16 +45,18 @@ class SplitComparisonView(QWidget):
 
     def update_buffers(
         self,
-        siren_rgb: np.ndarray,
+        siren_rgb: Optional[np.ndarray],
         discrete_full_frame: Optional[np.ndarray],
         viewport: ViewportBounds,
         hud_text: str = "",
     ) -> None:
         """Update both SIREN prediction and discrete cropped baseline frame."""
+        if siren_rgb is not None and not siren_rgb.flags['C_CONTIGUOUS']:
+            siren_rgb = np.ascontiguousarray(siren_rgb)
         self.siren_rgb = siren_rgb
         self.hud_text = hud_text
 
-        if discrete_full_frame is not None:
+        if discrete_full_frame is not None and siren_rgb is not None:
             # Crop discrete baseline to the exact same normalized viewport
             orig_h, orig_w, _ = discrete_full_frame.shape
             px_min = max(0, min(orig_w - 2, int(((viewport.x_min + 1.0) / 2.0) * orig_w)))
@@ -65,7 +67,10 @@ class SplitComparisonView(QWidget):
             cropped = discrete_full_frame[py_min:py_max, px_min:px_max]
             # Nearest neighbor scaling to show discrete pixels at high zoom
             target_h, target_w, _ = siren_rgb.shape
-            self.discrete_rgb = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+            resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+            if not resized.flags['C_CONTIGUOUS']:
+                resized = np.ascontiguousarray(resized)
+            self.discrete_rgb = resized
         else:
             self.discrete_rgb = None
 

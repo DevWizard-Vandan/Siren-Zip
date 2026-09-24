@@ -40,6 +40,10 @@ class ContinuousVideoCanvas(QWidget):
 
     def set_frame_buffer(self, rgb_numpy: np.ndarray, hud_text: str = "") -> None:
         """Update canvas with new RGB frame buffer from GPU inference engine."""
+        if rgb_numpy is None:
+            return
+        if not rgb_numpy.flags['C_CONTIGUOUS']:
+            rgb_numpy = np.ascontiguousarray(rgb_numpy)
         h, w, _ = rgb_numpy.shape
         bytes_per_line = 3 * w
         # QImage takes buffer reference

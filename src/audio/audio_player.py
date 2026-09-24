@@ -69,39 +69,32 @@ class AudioMasterClock(QObject):
 
     def play(self) -> None:
         """Start audio playback."""
+        self.fallback_start_time = time.perf_counter()
+        self._is_playing = True
         if self.is_loaded:
             self.player.play()
-            self._is_playing = True
-        else:
-            self.fallback_start_time = time.perf_counter()
-            self._is_playing = True
 
     def pause(self) -> None:
         """Pause audio playback."""
         if self.is_loaded:
             self.player.pause()
-            self._is_playing = False
-        else:
-            self.fallback_offset_sec = self.get_master_time()
-            self._is_playing = False
+        self.fallback_offset_sec = self.get_master_time()
+        self._is_playing = False
 
     def stop(self) -> None:
         """Stop audio playback and reset to 0.0s."""
         if self.is_loaded:
             self.player.stop()
-            self._is_playing = False
-        else:
-            self.fallback_offset_sec = 0.0
-            self._is_playing = False
+        self.fallback_offset_sec = 0.0
+        self._is_playing = False
 
     def seek(self, timestamp_sec: float) -> None:
         """Seek audio to specific timestamp in seconds."""
         t_clamped = max(0.0, float(timestamp_sec))
+        self.fallback_offset_sec = t_clamped
+        self.fallback_start_time = time.perf_counter()
         if self.is_loaded:
             self.player.setPosition(int(round(t_clamped * 1000.0)))
-        else:
-            self.fallback_offset_sec = t_clamped
-            self.fallback_start_time = time.perf_counter()
 
     def set_volume(self, volume_fraction: float) -> None:
         """Set volume in range [0.0, 1.0]."""
@@ -127,7 +120,11 @@ class AudioMasterClock(QObject):
         """Return authoritative hardware DAC timestamp with sub-millisecond precision."""
         if self.is_loaded:
             pos_ms = self.player.position()
-            return float(pos_ms / 1000.0)
+            pos_sec = float(pos_ms / 1000.0)
+            if self._is_playing and pos_sec == 0.0:
+                elapsed = time.perf_counter() - self.fallback_start_time
+                return max(0.0, self.fallback_offset_sec + elapsed)
+            return pos_sec
         else:
             if self._is_playing:
                 elapsed = time.perf_counter() - self.fallback_start_time
